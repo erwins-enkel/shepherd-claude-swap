@@ -221,9 +221,31 @@ describe("register — boot-warm gate", () => {
 // New-session assignment
 // ───────────────────────────────────────────────────────────────────────────
 
+/** Two non-active accounts so round-robin has ≥2 candidates after the active-account fix. */
+const twoNonActiveList = {
+  schemaVersion: 1,
+  activeAccountNumber: 99,
+  accounts: [
+    {
+      number: 1,
+      email: "acct1@example.com",
+      active: false,
+      usageStatus: "ok",
+      usage: { fiveHour: { pct: 0 }, sevenDay: { pct: 0 } },
+    },
+    {
+      number: 2,
+      email: "acct2@example.com",
+      active: false,
+      usageStatus: "ok",
+      usage: { fiveHour: { pct: 0 }, sevenDay: { pct: 0 } },
+    },
+  ],
+};
+
 describe("register — new-session assignment", () => {
   it("two fresh sessions get distinct accounts (round-robin) and pins are persisted", async () => {
-    const { runner } = makeFakeRunner({ prewarmOk: true });
+    const { runner } = makeFakeRunner({ prewarmOk: true, listResult: twoNonActiveList });
     const timers = makeFakeTimers();
     const fc = makeFakeCtx();
     await register(fc.ctx, {
