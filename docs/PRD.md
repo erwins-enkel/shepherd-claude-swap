@@ -104,14 +104,14 @@ isolation.
 
 ## 7. Key design decisions (resolved)
 
-| Decision | Choice |
-| --- | --- |
-| Integration target | Wrap external `realiti4/claude-swap` (`cswap`) — not a self-contained switcher |
+| Decision            | Choice                                                                                                                                                                             |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Integration target  | Wrap external `realiti4/claude-swap` (`cswap`) — not a self-contained switcher                                                                                                     |
 | Isolation mechanism | Per-spawn `credentialDir` = the account's `cswap` session-profile `CLAUDE_CONFIG_DIR` (no global `cswap --switch`, which would race parallel spawns and rotate live agents' creds) |
-| Selection | Sticky-per-session; round-robin for new sessions; skip `cswap`-reported rate-limited accounts |
-| No usable account | Hard-block via `ctx.abortSpawn` |
-| Profile seam | Self-contained: pre-warm profiles out-of-band via `cswap run`, inject the resolved path |
-| Scope | Lean: select + inject + status panel + stats/reset routes |
+| Selection           | Sticky-per-session; round-robin for new sessions; skip `cswap`-reported rate-limited accounts                                                                                      |
+| No usable account   | Hard-block via `ctx.abortSpawn`                                                                                                                                                    |
+| Profile seam        | Self-contained: pre-warm profiles out-of-band via `cswap run`, inject the resolved path                                                                                            |
+| Scope               | Lean: select + inject + status panel + stats/reset routes                                                                                                                          |
 
 ## 8. Assumptions
 
@@ -130,20 +130,20 @@ isolation.
 
 - **`cswap` profile-path coupling.** The plugin computes the session-profile path from
   `cswap`'s documented scheme. If `cswap` changes that layout the plugin breaks.
-  *Mitigation:* centralize path derivation in one module, validate the resolved dir is a
+  _Mitigation:_ centralize path derivation in one module, validate the resolved dir is a
   valid logged-in profile before injecting, fail-block on mismatch. A future upstream
   `cswap prepare --json` command (out of scope here) would remove the coupling entirely.
 - **Pre-warm staleness.** A profile may go stale (token rotation, `cswap`'s
-  `.cswap-stale-credentials` marker) between pre-warm and spawn. *Mitigation:* validate at
+  `.cswap-stale-credentials` marker) between pre-warm and spawn. _Mitigation:_ validate at
   injection time; re-warm out of band; block (don't silently spawn) if a profile can't be
   made valid in time.
 - **Concurrency.** Many agents spawn near-simultaneously on Shepherd's single event loop.
-  *Mitigation:* keep `onSpawn` to cheap in-memory selection + a `state` write; never run
+  _Mitigation:_ keep `onSpawn` to cheap in-memory selection + a `state` write; never run
   blocking `cswap`/`fs` calls synchronously on the hot path.
-- **API-key accounts.** Unsupported by `cswap run`. *Mitigation:* exclude them from the
+- **API-key accounts.** Unsupported by `cswap run`. _Mitigation:_ exclude them from the
   pool and surface the exclusion in the status panel.
 - **Resume after pool change.** A session's sticky account may be removed from the pool.
-  *Mitigation:* on resume, if the pinned account is gone/unusable, block the resume with a
+  _Mitigation:_ on resume, if the pinned account is gone/unusable, block the resume with a
   clear reason rather than silently reassigning.
 
 ## 10. Success criteria
