@@ -229,6 +229,20 @@ diff /tmp/before.json /tmp/after.json
   `cswap`'s documented scheme (`sessions/<N>-<emailSlug>/`). If `cswap` changes its layout
   the plugin breaks. See [docs/PRD.md §9](docs/PRD.md) for the mitigation strategy.
 
+- **The currently-active `cswap` account is excluded from the rotation pool.** `cswap run
+<active>` takes a same-account fast path that launches `claude` under the default
+  `~/.claude` **without** creating an isolated session profile. With no
+  `sessions/<N>-<slug>/` dir to point at, the warm-time existence guard never marks that
+  account ready, so it is never assigned (the plugin won't inject a non-existent
+  `credentialDir`). Consequence: rotation spans your **non-active** accounts. To rotate
+  across N accounts, make sure the one `cswap` currently has active is not the only spare —
+  or `cswap --switch-to` an account you don't intend to rotate. Verified end-to-end against
+  live `cswap`; see [docs/contracts/smoke-test-results.md](docs/contracts/smoke-test-results.md).
+
+- **Rate-limited accounts are skipped** for new assignments (5h or 7d `pct ≥ rateLimitPct`),
+  as reported by `cswap --list --json`. If every non-active account is rate-limited, new
+  creates are hard-blocked until one frees up.
+
 - **No hot-reload.** Plugins load at boot only (Shepherd's design). Config changes require
   `systemctl --user restart shepherd`.
 
