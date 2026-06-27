@@ -109,6 +109,20 @@ describe("Cswap.list()", () => {
     await expect(cswap.list()).rejects.toThrow();
   });
 
+  it("throws on schemaVersion 1 with missing accounts[]", async () => {
+    const payload = JSON.stringify({ schemaVersion: 1 });
+    const { runner } = makeRunner({ stdout: payload, stderr: "", code: 0, timedOut: false });
+    const cswap = new Cswap("cswap", runner);
+    await expect(cswap.list()).rejects.toThrow("cswap --list --json: missing accounts[]");
+  });
+
+  it("throws on schemaVersion 1 with non-array accounts", async () => {
+    const payload = JSON.stringify({ schemaVersion: 1, accounts: { not: "an array" } });
+    const { runner } = makeRunner({ stdout: payload, stderr: "", code: 0, timedOut: false });
+    const cswap = new Cswap("cswap", runner);
+    await expect(cswap.list()).rejects.toThrow("cswap --list --json: missing accounts[]");
+  });
+
   it("throws on non-JSON stdout", async () => {
     const { runner } = makeRunner({
       stdout: "not json",

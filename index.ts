@@ -27,6 +27,8 @@ export interface PluginDeps {
   clearInterval?: (handle: unknown) => void;
   /** `lastSpawn` timestamp source. Default = `() => new Date().toISOString()`. */
   now?: () => string;
+  /** Injected into `Prewarmer` for the warm-time profile-dir guard. Default = real `fs.existsSync`. */
+  existsSync?: (path: string) => boolean;
 }
 
 const defaultSetInterval: NonNullable<PluginDeps["setInterval"]> = (fn, ms) => {
@@ -60,11 +62,15 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
     cswap,
     cfg,
     log: ctx.log,
+    backupRoot,
     onChange: () => publish(),
+    existsSync: deps?.existsSync,
   });
 
   const publish = (): void => {
-    ctx.publishStatus(buildStatus(cfg, prewarmer.pool, prewarmer.ready, state, lastSpawn));
+    ctx.publishStatus(
+      buildStatus(cfg, prewarmer.pool, prewarmer.ready, state, lastSpawn, prewarmer.lastError),
+    );
   };
 
   // ── Boot: list the pool, then await boot-warm of ≥1 account (the spawn-acceptance gate).
@@ -108,6 +114,8 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
     if (result.kind === "warm") {
       // Resume of a pinned account whose profile isn't ready yet: kick a background warm
       // (fire-and-forget — never await on the hot path) and refuse this attempt cleanly.
+      // Intentional asymmetry: a resume aborts regardless of `abortOnEmpty` — it must never
+      // fail open onto the default login (would silently rotate a running session's identity).
       void prewarmer.warm(result.accountNumber);
       ctx.abortSpawn(`account ${result.accountNumber} warming; retry resume`);
     }
@@ -122,7 +130,9 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
 
   // ── Routes (under /api/plugins/claude-swap/…).
   ctx.route("GET", "stats", () =>
-    Response.json(buildStatus(cfg, prewarmer.pool, prewarmer.ready, state, lastSpawn)),
+    Response.json(
+      buildStatus(cfg, prewarmer.pool, prewarmer.ready, state, lastSpawn, prewarmer.lastError),
+    ),
   );
   ctx.route("POST", "reset", () => {
     state.cursor = 0;

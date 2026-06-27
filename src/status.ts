@@ -11,7 +11,8 @@ export interface LastSpawn {
 
 /**
  * Free-form JSON blob for publishStatus + GET stats: config in effect, pool (per-account
- * number/email/usable/rateLimited/pct/ready), current assignments, cursor, lastSpawn.
+ * number/email/usable/rateLimited/pct/ready), current assignments, cursor, lastSpawn, and
+ * the last refresh error (`lastError`) so operators can see why the pool is empty.
  * All values are JSON-serializable (no Set/Map/undefined).
  */
 export function buildStatus(
@@ -20,6 +21,7 @@ export function buildStatus(
   ready: Set<number>,
   state: SelectionState,
   lastSpawn: LastSpawn | null,
+  lastError: string | null,
 ): Record<string, unknown> {
   return {
     config: {
@@ -46,5 +48,6 @@ export function buildStatus(
     assignments: state.assignments,
     cursor: state.cursor,
     lastSpawn: lastSpawn,
+    lastError: lastError,
   };
 }

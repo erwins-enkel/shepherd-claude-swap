@@ -88,6 +88,11 @@ an account, writes the sticky assignment to `ctx.state` (synchronously, before r
 and returns `{ credentialDir: <session-profile-dir> }`. The injected path becomes
 `CLAUDE_CONFIG_DIR` for the spawned agent.
 
+**Warm/retry resume edge case:** if a resume's pinned account is usable but its profile is
+not yet pre-warmed (e.g. right after a restart), the spawn is aborted with a "retry" message
+while a background re-warm is kicked off. This is a transient retry, not a failure — no
+worktree is lost; resuming again once the account is warm lands on the same pinned account.
+
 **Background loop:** Every `refreshIntervalMs` the pool is re-listed and any usable-but-not-
 ready accounts are re-warmed out of band.
 
@@ -148,12 +153,20 @@ but that each agent's `claude auth status --json` reports the assigned account's
 ≥1 account warms (up to `bootWarmTimeoutMs` = 30 s by default). This is expected — wait
 for the first spawn to succeed before running steps (a)–(d).
 
+> There is no `shepherd` CLI binary. Sessions are created and resumed through the **Shepherd
+> Web UI** (or the `POST /api/sessions` HTTP API); resume happens via Shepherd's normal
+> autopilot / automerge / manual-resume flow.
+
 ### (a) Two concurrent sessions land on different accounts
 
+Create two sessions in quick succession via the **Shepherd Web UI** (New Session × 2), or via
+the HTTP API:
+
 ```sh
-# In two terminals, simultaneously:
-shepherd create --session A
-shepherd create --session B
+curl -s -X POST -H "Authorization: Bearer $SHEPHERD_TOKEN" \
+  http://localhost:<port>/api/sessions -d '{"repo":"<repo>"}'   # session A
+curl -s -X POST -H "Authorization: Bearer $SHEPHERD_TOKEN" \
+  http://localhost:<port>/api/sessions -d '{"repo":"<repo>"}'   # session B
 
 # In each session's agent, run:
 claude auth status --json | jq '{email: .email}'
@@ -170,10 +183,10 @@ curl -s -H "Authorization: Bearer $SHEPHERD_TOKEN" \
 
 ### (b) Resume lands on the original account
 
-```sh
-shepherd resume --session A
+Resume session A from the **Shepherd Web UI** (open the session and let it resume via the
+normal autopilot / manual-resume flow). In the resumed agent:
 
-# In the resumed agent:
+```sh
 claude auth status --json | jq '{email: .email}'
 # Expected: same email as in step (a) for session A.
 ```
@@ -181,11 +194,10 @@ claude auth status --json | jq '{email: .email}'
 ### (c) All accounts rate-limited → create is blocked
 
 Temporarily set `rateLimitPct: 0` in `config.json` (treats all accounts as rate-limited),
-then restart Shepherd. Attempt a create:
+then restart Shepherd. Create a session from the **Shepherd Web UI** (or `POST /api/sessions`):
 
 ```sh
-shepherd create --session C
-# Expected: spawn refused with an error — no agent launched, worktree rolled back.
+# Expected: session creation is refused — no agent launched, worktree rolled back.
 # Restore rateLimitPct to 100 and restart when done.
 ```
 

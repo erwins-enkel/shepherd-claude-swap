@@ -172,6 +172,7 @@ describe("register — boot-warm gate", () => {
       setInterval: timers.setIntervalFn,
       clearInterval: timers.clearIntervalFn,
       now,
+      existsSync: () => true,
     });
     const handler = fc.routes.get("GET stats")!;
     const body = (await (await handler(new Request("http://x/stats"))).json()) as {
@@ -189,6 +190,7 @@ describe("register — boot-warm gate", () => {
       setInterval: timers.setIntervalFn,
       clearInterval: timers.clearIntervalFn,
       now,
+      existsSync: () => true,
     });
     // register resolved → plugin loaded even though degraded
     expect(typeof teardown).toBe("function");
@@ -208,6 +210,7 @@ describe("register — boot-warm gate", () => {
       setInterval: timers.setIntervalFn,
       clearInterval: timers.clearIntervalFn,
       now,
+      existsSync: () => true,
     });
     expect(timers.handles).toHaveLength(1);
     expect(timers.handles[0]!.ms).toBe(12345);
@@ -228,6 +231,7 @@ describe("register — new-session assignment", () => {
       setInterval: timers.setIntervalFn,
       clearInterval: timers.clearIntervalFn,
       now,
+      existsSync: () => true,
     });
     const hook = fc.getHook();
     const p1 = runHook(hook, "s1") as SpawnPatch;
@@ -253,6 +257,7 @@ describe("register — new-session assignment", () => {
       setInterval: timers.setIntervalFn,
       clearInterval: timers.clearIntervalFn,
       now,
+      existsSync: () => true,
     });
     const before = calls.length;
     runHook(fc.getHook(), "s1");
@@ -274,6 +279,7 @@ describe("register — sticky resume (criterion 2)", () => {
       setInterval: timers.setIntervalFn,
       clearInterval: timers.clearIntervalFn,
       now,
+      existsSync: () => true,
     });
     const hook = fc.getHook();
     const first = runHook(hook, "s1") as SpawnPatch;
@@ -294,6 +300,7 @@ describe("register — sticky resume (criterion 2)", () => {
         setInterval: timers.setIntervalFn,
         clearInterval: timers.clearIntervalFn,
         now,
+        existsSync: () => true,
       });
       firstDir = (runHook(fc.getHook(), "s1") as SpawnPatch).credentialDir;
     }
@@ -307,6 +314,7 @@ describe("register — sticky resume (criterion 2)", () => {
         setInterval: timers.setIntervalFn,
         clearInterval: timers.clearIntervalFn,
         now,
+        existsSync: () => true,
       });
       const resumed = (runHook(fc.getHook(), "s1") as SpawnPatch).credentialDir;
       expect(resumed).toBe(firstDir);
@@ -328,6 +336,7 @@ describe("register — hard-block (criterion 3)", () => {
       setInterval: timers.setIntervalFn,
       clearInterval: timers.clearIntervalFn,
       now,
+      existsSync: () => true,
     });
     expect(() => runHook(fc.getHook(), "fresh")).toThrow(PluginSpawnAborted);
   });
@@ -341,6 +350,7 @@ describe("register — hard-block (criterion 3)", () => {
       setInterval: timers.setIntervalFn,
       clearInterval: timers.clearIntervalFn,
       now,
+      existsSync: () => true,
     });
     const patch = runHook(fc.getHook(), "fresh");
     expect(patch).toEqual({});
@@ -365,6 +375,7 @@ describe("register — warm resume", () => {
       setInterval: timers.setIntervalFn,
       clearInterval: timers.clearIntervalFn,
       now,
+      existsSync: () => true,
     });
     const runCallsForAcct1 = () =>
       calls.filter((c) => c.args[0] === "run" && c.args[1] === "1").length;
@@ -374,6 +385,43 @@ describe("register — warm resume", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(runCallsForAcct1()).toBe(before + 1);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// lastError diagnosability (criterion 6)
+// ───────────────────────────────────────────────────────────────────────────
+
+describe("register — lastError surfaced when cswap absent/failing", () => {
+  it("GET stats shows non-null lastError, empty pool, and onSpawn still hard-blocks", async () => {
+    // cswap --list always fails (simulates cswap absent / non-zero exit).
+    const failingRunner: Runner = async (_bin, args) => {
+      if (args[0] === "--list") {
+        return { stdout: "", stderr: "cswap: command not found", code: 127, timedOut: false };
+      }
+      return { stdout: "", stderr: "", code: 0, timedOut: false };
+    };
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx({ config: { abortOnEmpty: true } });
+    await register(fc.ctx, {
+      runner: failingRunner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+
+    const handler = fc.routes.get("GET stats")!;
+    const body = (await (await handler(new Request("http://x/stats"))).json()) as {
+      lastError: string | null;
+      pool: unknown[];
+    };
+    expect(body.lastError).not.toBeNull();
+    expect(typeof body.lastError).toBe("string");
+    expect(body.pool).toEqual([]);
+
+    // onSpawn still hard-blocks (does not mis-spawn) despite the failing pool.
+    expect(() => runHook(fc.getHook(), "fresh")).toThrow(PluginSpawnAborted);
   });
 });
 
@@ -391,6 +439,7 @@ describe("register — routes", () => {
       setInterval: timers.setIntervalFn,
       clearInterval: timers.clearIntervalFn,
       now,
+      existsSync: () => true,
     });
     const handler = fc.routes.get("GET stats")!;
     const res = await handler(new Request("http://x/stats"));
@@ -409,6 +458,7 @@ describe("register — routes", () => {
       setInterval: timers.setIntervalFn,
       clearInterval: timers.clearIntervalFn,
       now,
+      existsSync: () => true,
     });
     // create an assignment first
     runHook(fc.getHook(), "s1");
@@ -444,6 +494,7 @@ describe("register — teardown", () => {
       setInterval: timers.setIntervalFn,
       clearInterval: timers.clearIntervalFn,
       now,
+      existsSync: () => true,
     });
     expect(timers.cleared).toHaveLength(0);
     (teardown as () => void)();

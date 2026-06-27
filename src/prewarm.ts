@@ -1,14 +1,20 @@
+import { existsSync as fsExistsSync } from "node:fs";
 import type { PluginLogger } from "../types";
 import type { ResolvedConfig } from "./config";
 import type { Cswap } from "./cswap";
 import { classifyPool, type PoolAccount } from "./accounts";
+import { sessionProfileDir } from "./paths";
 
 export interface PrewarmerDeps {
   cswap: Cswap;
   cfg: ResolvedConfig;
   log: PluginLogger;
+  /** cswap backup root — used to derive the session-profile dir for the warm-time guard. */
+  backupRoot: string;
   /** Called after every refresh (success or failure) so the host can re-publish status. */
   onChange?: () => void;
+  /** Injectable fs-exists check (warm-time only, never on the hot path). Default `fs.existsSync`. */
+  existsSync?: (path: string) => boolean;
 }
 
 /**
@@ -24,11 +30,15 @@ export class Prewarmer {
   pool: PoolAccount[] = [];
   /** Account numbers whose session profile is pre-warmed and ready to assign. */
   readonly ready: Set<number> = new Set();
+  /** Last `list()` error message (set on refresh failure, cleared on success) for diagnosability. */
+  lastError: string | null = null;
 
   private readonly cswap: Cswap;
   private readonly cfg: ResolvedConfig;
   private readonly log: PluginLogger;
+  private readonly backupRoot: string;
   private readonly onChange?: () => void;
+  private readonly existsSync: (path: string) => boolean;
   /** De-dupes concurrent warms of the same account. */
   private readonly inFlight = new Map<number, Promise<void>>();
 
@@ -36,7 +46,9 @@ export class Prewarmer {
     this.cswap = deps.cswap;
     this.cfg = deps.cfg;
     this.log = deps.log;
+    this.backupRoot = deps.backupRoot;
     this.onChange = deps.onChange;
+    this.existsSync = deps.existsSync ?? fsExistsSync;
   }
 
   /**
@@ -54,10 +66,17 @@ export class Prewarmer {
           this.ready.delete(n);
         }
       }
+      this.lastError = null;
     } catch (err) {
-      this.log.warn("cswap --list refresh failed; keeping last snapshot:", String(err));
+      this.lastError = err instanceof Error ? err.message : String(err);
+      this.log.warn("cswap --list refresh failed; keeping last snapshot:", this.lastError);
     }
-    this.onChange?.();
+    // Status publish must never escape the fire-and-forget tick / boot await.
+    try {
+      this.onChange?.();
+    } catch (err) {
+      this.log.warn("status publish during refresh threw:", String(err));
+    }
   }
 
   /**
@@ -74,10 +93,26 @@ export class Prewarmer {
         this.cfg.prewarmArgs,
         this.cfg.bootWarmTimeoutMs,
       );
-      if (res.ok) {
+      if (!res.ok) {
+        this.log.warn(`prewarm of account ${accountNumber} failed: ${res.error ?? "unknown"}`);
+        return;
+      }
+      // Warm-time guard (PRD §9): only mark ready if the resolved profile dir actually
+      // exists, so `onSpawn` never injects a non-existent credentialDir. Off the hot path.
+      const acct = this.pool.find((a) => a.number === accountNumber);
+      if (acct === undefined) {
+        this.log.warn(
+          `prewarm of account ${accountNumber} ok but it is absent from the pool snapshot; not marking ready`,
+        );
+        return;
+      }
+      const dir = sessionProfileDir(this.backupRoot, accountNumber, acct.email);
+      if (this.existsSync(dir)) {
         this.ready.add(accountNumber);
       } else {
-        this.log.warn(`prewarm of account ${accountNumber} failed: ${res.error ?? "unknown"}`);
+        this.log.warn(
+          `prewarm of account ${accountNumber} ok but profile dir is absent (${dir}); not marking ready`,
+        );
       }
     })().finally(() => {
       this.inFlight.delete(accountNumber);

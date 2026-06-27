@@ -106,6 +106,10 @@ export class Cswap {
       throw new Error(`unsupported cswap schema version: ${String(obj["schemaVersion"])}`);
     }
 
+    if (!Array.isArray(obj["accounts"])) {
+      throw new Error("cswap --list --json: missing accounts[]");
+    }
+
     return obj as unknown as CswapListResult;
   }
 
