@@ -29,8 +29,8 @@ isolation.
   under another running agent.
 - Keep a session on one account across its lifecycle (create + every resume) for auth and
   cost-replay continuity.
-- Refuse to spawn under the wrong account: if no usable account is available, hard-block
-  rather than silently fall back to the default login.
+- Refuse to spawn under the wrong account: if no usable account is available, refuse the
+  spawn rather than silently fall back to the default login.
 - Surface what the plugin is doing (pool, per-account quota, assignments) in Shepherd's
   Settings → Plugins panel.
 
@@ -61,8 +61,9 @@ isolation.
    round-robin order; when that session later resumes (autopilot / automerge / manual) it
    reuses the **same** account it was created under.
 3. As an operator, when all accounts are rate-limited or none can be made ready, the spawn
-   is **refused** (create rolls back, non-forced resume returns "can't resume") instead of
-   running under my default login — and I see why.
+   is **refused** instead of running under my default login — and I see why. A refused
+   create is held in Shepherd's hold queue and retried until an account frees (no task
+   loss); a non-forced resume returns "can't resume".
 4. As an operator, I open Settings → Plugins and see each account's 5h/7d quota, which
    session is on which account, and the last spawn decision.
 5. As an operator, I call `GET /api/plugins/claude-swap/stats` to inspect assignments and
@@ -87,7 +88,10 @@ isolation.
   off the hot path (at boot and/or in the background) by invoking a throwaway
   `cswap run <N> -- <trivial-exit>`, then resolves the deterministic profile path. Token
   refresh / seeding therefore never runs inside the 5-second `onSpawn` budget.
-- **Hard-block:** `ctx.abortSpawn(reason)` when no usable account is ready for assignment.
+- **Spawn refusal:** `ctx.abortSpawn(reason)` when no usable account is ready for
+  assignment. Shepherd parks a refused create in its `held_tasks` hold queue
+  (`reason='capacity'`) and retries it via the sweeper until an account frees (no task
+  loss); a non-forced resume is hard-blocked ("can't resume").
 - **Status panel:** `ctx.publishStatus(...)` with config in effect, per-account quota,
   current session→account assignments, and the last spawn decision.
 - **Routes (behind operator auth):** `GET stats`, `POST reset`.
@@ -109,7 +113,7 @@ isolation.
 | Integration target  | Wrap external `realiti4/claude-swap` (`cswap`) — not a self-contained switcher                                                                                                     |
 | Isolation mechanism | Per-spawn `credentialDir` = the account's `cswap` session-profile `CLAUDE_CONFIG_DIR` (no global `cswap --switch`, which would race parallel spawns and rotate live agents' creds) |
 | Selection           | Sticky-per-session; round-robin for new sessions; skip `cswap`-reported rate-limited accounts                                                                                      |
-| No usable account   | Hard-block via `ctx.abortSpawn`                                                                                                                                                    |
+| No usable account   | Refuse via `ctx.abortSpawn`; Shepherd holds + retries a refused create (no task loss), hard-blocks a non-forced resume                                                              |
 | Profile seam        | Self-contained: pre-warm profiles out-of-band via `cswap run`, inject the resolved path                                                                                            |
 | Scope               | Lean: select + inject + status panel + stats/reset routes                                                                                                                          |
 
@@ -152,9 +156,9 @@ isolation.
    round-robin across the pool, each agent observing a distinct `CLAUDE_CONFIG_DIR`.
 2. A session created on account A resumes on account A across autopilot / automerge /
    manual resume.
-3. With every pool account rate-limited (or no profile ready), a create is refused and its
-   worktree rolled back; a non-forced resume returns "can't resume" — neither spawns under
-   the default login.
+3. With every pool account rate-limited (or no profile ready), a create is refused and
+   parked in Shepherd's hold queue, then retried until an account frees (no worktree loss);
+   a non-forced resume returns "can't resume" — neither spawns under the default login.
 4. No global `cswap --switch` is performed; a running agent's credentials are never
    rotated by another spawn.
 5. The Settings → Plugins panel shows live per-account quota and session→account
