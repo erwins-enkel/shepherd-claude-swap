@@ -29,6 +29,7 @@ export function buildStatus(
       includeSlots: cfg.includeSlots,
       excludeSlots: cfg.excludeSlots,
       rateLimitPct: cfg.rateLimitPct,
+      strategy: cfg.strategy,
       prewarmArgs: cfg.prewarmArgs,
       refreshIntervalMs: cfg.refreshIntervalMs,
       bootWarmTimeoutMs: cfg.bootWarmTimeoutMs,
