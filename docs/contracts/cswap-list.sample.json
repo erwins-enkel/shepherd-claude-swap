@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "activeAccountNumber": 1,
+  "accounts": [
+    {
+      "number": 1,
+      "email": "acct1@example.com",
+      "organizationName": "Example Org",
+      "organizationUuid": "00000000-0000-0000-0000-000000000000",
+      "isOrganization": true,
+      "active": true,
+      "usageStatus": "ok",
+      "usage": {
+        "fiveHour": {
+          "pct": 93.0,
+          "resetsAt": "2026-06-27T20:00:00.277424+00:00",
+          "countdown": "1h 43m",
+          "clock": "22:00"
+        },
+        "sevenDay": {
+          "pct": 19.0,
+          "resetsAt": "2026-07-04T15:00:00.277447+00:00",
+          "countdown": "6d 20h",
+          "clock": "Jul 4 17:00"
+        }
+      }
+    },
+    {
+      "number": 2,
+      "email": "acct2@example.com",
+      "organizationName": "Example Org",
+      "organizationUuid": "00000000-0000-0000-0000-000000000000",
+      "isOrganization": true,
+      "active": false,
+      "usageStatus": "ok",
+      "usage": {
+        "fiveHour": {
+          "pct": 0.0
+        },
+        "sevenDay": {
+          "pct": 98.0,
+          "resetsAt": "2026-06-29T22:00:00.362222+00:00",
+          "countdown": "2d 3h",
+          "clock": "Jun 30 00:00"
+        }
+      }
+    }
+  ]
+}
