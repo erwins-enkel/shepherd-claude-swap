@@ -125,7 +125,9 @@ export class Prewarmer {
   /** Warm every usable, non-rate-limited account that is not yet ready (fire-and-forget). */
   warmStale(): void {
     for (const acct of this.pool) {
-      if (acct.usable && !acct.rateLimited && !this.ready.has(acct.number)) {
+      // Skip the active cswap account: `cswap run <active>` uses the default ~/.claude and
+      // creates no isolated session profile, so warming it is futile and would spam every cycle.
+      if (acct.usable && !acct.rateLimited && !acct.active && !this.ready.has(acct.number)) {
         void this.warm(acct.number);
       }
     }
@@ -139,8 +141,11 @@ export class Prewarmer {
    */
   async bootWarm(): Promise<void> {
     if (this.ready.size > 0) return;
+    // Skip the active cswap account: `cswap run <active>` uses the default ~/.claude and
+    // creates no isolated session profile, so warming it at boot is futile (and the
+    // interval re-warm in warmStale would otherwise retry it every cycle).
     const candidates = this.pool.filter(
-      (a) => a.usable && !a.rateLimited && !this.ready.has(a.number),
+      (a) => a.usable && !a.rateLimited && !a.active && !this.ready.has(a.number),
     );
     if (candidates.length === 0) return;
 

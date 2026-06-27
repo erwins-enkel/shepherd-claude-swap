@@ -30,6 +30,21 @@ function makeRunner(opts?: { listOk?: boolean; prewarmOk?: boolean }): Runner {
   };
 }
 
+/** Tracking runner: records which account numbers were prewarmed via `run <N>`. */
+function makeTrackingRunner(): { runner: Runner; prewarmedAccounts: number[] } {
+  const prewarmedAccounts: number[] = [];
+  const runner: Runner = async (_bin, args) => {
+    if (args[0] === "--list") {
+      return { stdout: JSON.stringify(fixtureRaw), stderr: "", code: 0, timedOut: false };
+    }
+    if (args[0] === "run") {
+      prewarmedAccounts.push(Number(args[1]));
+    }
+    return { stdout: "", stderr: "", code: 0, timedOut: false };
+  };
+  return { runner, prewarmedAccounts };
+}
+
 function makePrewarmer(overrides: Partial<PrewarmerDeps> = {}): {
   prewarmer: Prewarmer;
   warnings: string[];
@@ -133,5 +148,51 @@ describe("Prewarmer.warm — profile-dir existence guard", () => {
     await prewarmer.warm(1);
     // fixture account 1 email = acct1@example.com → slug acct1_example.com
     expect(checked).toContain("/custom/root/sessions/1-acct1_example.com");
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Fix: skip warming the active cswap account (no isolated profile)
+// ───────────────────────────────────────────────────────────────────────────
+
+describe("Prewarmer — active account exclusion", () => {
+  // fixture: account 1 = active:true, account 2 = active:false; both usable, not rate-limited
+
+  it("warmStale() never calls prewarm for the active account", async () => {
+    const { runner, prewarmedAccounts } = makeTrackingRunner();
+    const { prewarmer } = makePrewarmer({ cswap: new Cswap("cswap", runner) });
+    await prewarmer.refresh();
+    prewarmer.warmStale();
+    await prewarmer.drain();
+    expect(prewarmedAccounts).not.toContain(1);
+  });
+
+  it("warmStale() never warms the active account across repeated cycles", async () => {
+    const { runner, prewarmedAccounts } = makeTrackingRunner();
+    const { prewarmer } = makePrewarmer({ cswap: new Cswap("cswap", runner) });
+    await prewarmer.refresh();
+    for (let i = 0; i < 3; i++) {
+      prewarmer.warmStale();
+      await prewarmer.drain();
+    }
+    expect(prewarmedAccounts).not.toContain(1);
+  });
+
+  it("bootWarm() never calls prewarm for the active account", async () => {
+    const { runner, prewarmedAccounts } = makeTrackingRunner();
+    const { prewarmer } = makePrewarmer({ cswap: new Cswap("cswap", runner) });
+    await prewarmer.refresh();
+    await prewarmer.bootWarm();
+    expect(prewarmedAccounts).not.toContain(1);
+  });
+
+  it("warmStale() still warms a non-active usable account", async () => {
+    const { runner, prewarmedAccounts } = makeTrackingRunner();
+    const { prewarmer } = makePrewarmer({ cswap: new Cswap("cswap", runner) });
+    await prewarmer.refresh();
+    prewarmer.warmStale();
+    await prewarmer.drain();
+    // account 2: active=false, usable, not rate-limited → must be warmed
+    expect(prewarmedAccounts).toContain(2);
   });
 });
