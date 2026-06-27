@@ -225,6 +225,10 @@ diff /tmp/before.json /tmp/after.json
   reimport accounts, predict rate-limit exhaustion beyond what `cswap` reports, or support
   multi-host coordination. See [docs/PRD.md §3](docs/PRD.md) for the full non-goals list.
 
+- **Selection is round-robin, not quota-aware.** New sessions rotate through eligible
+  accounts in order — the plugin does not yet pick the least-used / most-remaining-quota
+  account. An opt-in `least-used` strategy is specced as a follow-up: [#3](../../issues/3).
+
 - **`cswap` profile-path coupling.** The plugin derives the session-profile path from
   `cswap`'s documented scheme (`sessions/<N>-<emailSlug>/`). If `cswap` changes its layout
   the plugin breaks. See [docs/PRD.md §9](docs/PRD.md) for the mitigation strategy.
