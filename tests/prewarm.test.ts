@@ -77,23 +77,26 @@ describe("Prewarmer.refresh — never rejects", () => {
 // ───────────────────────────────────────────────────────────────────────────
 
 describe("Prewarmer.lastError", () => {
-  it("is set when list() fails and cleared on a subsequent success", async () => {
-    const { prewarmer } = makePrewarmer({
-      cswap: new Cswap("cswap", makeRunner({ listOk: false })),
-    });
+  it("is set when list() fails and cleared on a subsequent success (same instance)", async () => {
+    // Toggleable runner: drive the failure→success transition on ONE Prewarmer instance so
+    // the success-branch `this.lastError = null` clears a previously non-null value.
+    let fail = true;
+    const toggleRunner: Runner = async (_bin, args) => {
+      if (args[0] === "--list") {
+        return fail
+          ? { stdout: "", stderr: "boom", code: 1, timedOut: false }
+          : { stdout: JSON.stringify(fixtureRaw), stderr: "", code: 0, timedOut: false };
+      }
+      return { stdout: "", stderr: "", code: 0, timedOut: false };
+    };
+    const { prewarmer } = makePrewarmer({ cswap: new Cswap("cswap", toggleRunner) });
+
     await prewarmer.refresh();
     expect(prewarmer.lastError).not.toBeNull();
 
-    // Swap in a healthy runner and refresh again → cleared.
-    const healthy = new Prewarmer({
-      cswap: new Cswap("cswap", makeRunner({ listOk: true })),
-      cfg: parseConfig({}),
-      log: makeLog().log,
-      backupRoot: "/tmp/backup-root",
-      existsSync: () => true,
-    });
-    await healthy.refresh();
-    expect(healthy.lastError).toBeNull();
+    fail = false;
+    await prewarmer.refresh();
+    expect(prewarmer.lastError).toBeNull();
   });
 });
 
