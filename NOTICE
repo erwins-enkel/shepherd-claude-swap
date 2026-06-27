@@ -1,0 +1,13 @@
+shepherd-claude-swap
+Copyright 2026 Patrick Lenz
+
+This product vendors one file from Shepherd (https://github.com/erwins-enkel/shepherd),
+licensed under the Apache License, Version 2.0:
+
+  types.ts  ←  src/plugins/types.ts @ 9124026a13479ca1d30173bf1f523e8950587051
+
+The full Apache-2.0 license text is available at:
+  https://www.apache.org/licenses/LICENSE-2.0
+
+The cswap CLI (https://github.com/realiti4/claude-swap, MIT) is invoked as a
+separate subprocess and is NOT vendored or redistributed by this project.
