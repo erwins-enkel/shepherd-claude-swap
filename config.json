@@ -3,6 +3,7 @@
   "includeSlots": null,
   "excludeSlots": [],
   "rateLimitPct": 100,
+  "strategy": "round-robin",
   "prewarmArgs": ["--version"],
   "refreshIntervalMs": 60000,
   "bootWarmTimeoutMs": 30000,
