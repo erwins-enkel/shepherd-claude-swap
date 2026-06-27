@@ -88,7 +88,7 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
 
   // ── Hot path: cheap in-memory selection + synchronous state persist. NO I/O.
   ctx.onSpawn((d): SpawnPatch | void => {
-    const result = assign(state, d.sessionId, prewarmer.pool, prewarmer.ready);
+    const result = assign(state, d.sessionId, prewarmer.pool, prewarmer.ready, cfg.strategy);
 
     if (result.kind === "assigned") {
       // Persist the pin + cursor durably BEFORE returning the patch (sync `state.set`).
