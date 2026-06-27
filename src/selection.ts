@@ -1,4 +1,5 @@
 import type { PoolAccount } from "./accounts";
+import type { Strategy } from "./config";
 
 export interface SelectionState {
   cursor: number;
@@ -18,9 +19,11 @@ export type AssignResult =
  *   - pin usable & not rate-limited & NOT ready → "warm" (state unchanged)
  *   - pin gone/unusable/rate-limited → "abort" (reason; state unchanged — never reassign a resume)
  *
- * New session (no pin): round-robin (using cursor) over accounts that are
- *   usable && !rateLimited && ready. None → "abort". Else "assigned": write pin
- *   (assignments[sessionId]=acct) and advance cursor in nextState.
+ * New session (no pin): pick from accounts that are usable && !rateLimited && ready.
+ *   - "round-robin": cursor % eligible.length, advance cursor.
+ *   - "least-used": account with lowest max(fiveHourPct ?? 100, sevenDayPct ?? 100);
+ *     tie-break by lowest account number. Cursor still advances by 1.
+ *   None eligible → "abort".
  *
  * Deterministic; no Date/random.
  */
@@ -29,6 +32,7 @@ export function assign(
   sessionId: string,
   pool: PoolAccount[],
   ready: Set<number>,
+  strategy: Strategy,
 ): AssignResult {
   const pin = state.assignments[sessionId];
 
@@ -70,7 +74,7 @@ export function assign(
   }
 
   // -------------------------------------------------------------------------
-  // New session path — round-robin over eligible
+  // New session path — pick over eligible
   // -------------------------------------------------------------------------
   const eligible = pool.filter((a) => a.usable && !a.rateLimited && ready.has(a.number));
 
@@ -82,7 +86,8 @@ export function assign(
     };
   }
 
-  const picked = eligible[state.cursor % eligible.length]!;
+  const picked =
+    strategy === "least-used" ? pickLeastUsed(eligible) : eligible[state.cursor % eligible.length]!;
 
   return {
     kind: "assigned",
@@ -92,4 +97,20 @@ export function assign(
       assignments: { ...state.assignments, [sessionId]: picked.number },
     },
   };
+}
+
+/**
+ * Pick the eligible account with the lowest usage metric.
+ * metric(a) = max(fiveHourPct ?? 100, sevenDayPct ?? 100)
+ * A single null pct forces the whole metric to 100.
+ * Tie-break: lowest account number. Deterministic; no Date/random.
+ */
+function pickLeastUsed(eligible: PoolAccount[]): PoolAccount {
+  return eligible.reduce((best, curr) => {
+    const bestMetric = Math.max(best.fiveHourPct ?? 100, best.sevenDayPct ?? 100);
+    const currMetric = Math.max(curr.fiveHourPct ?? 100, curr.sevenDayPct ?? 100);
+    if (currMetric < bestMetric) return curr;
+    if (currMetric === bestMetric && curr.number < best.number) return curr;
+    return best;
+  });
 }

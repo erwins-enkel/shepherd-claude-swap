@@ -1,8 +1,11 @@
+export type Strategy = "round-robin" | "least-used";
+
 export interface ResolvedConfig {
   cswapBin: string;
   includeSlots: number[] | null;
   excludeSlots: number[];
   rateLimitPct: number;
+  strategy: Strategy;
   prewarmArgs: string[];
   refreshIntervalMs: number;
   bootWarmTimeoutMs: number;
@@ -59,6 +62,14 @@ export function parseConfig(raw: Record<string, unknown>): ResolvedConfig {
     );
   }
 
+  // strategy
+  const strategy = "strategy" in raw ? raw["strategy"] : "round-robin";
+  if (strategy !== "round-robin" && strategy !== "least-used") {
+    throw new Error(
+      `strategy: expected "round-robin" | "least-used", got ${JSON.stringify(strategy)}`,
+    );
+  }
+
   // prewarmArgs
   const rawPrewarm = "prewarmArgs" in raw ? raw["prewarmArgs"] : ["--version"];
   if (!Array.isArray(rawPrewarm)) {
@@ -106,6 +117,7 @@ export function parseConfig(raw: Record<string, unknown>): ResolvedConfig {
     includeSlots,
     excludeSlots,
     rateLimitPct,
+    strategy,
     prewarmArgs,
     refreshIntervalMs,
     bootWarmTimeoutMs,

@@ -10,6 +10,7 @@ describe("parseConfig", () => {
         includeSlots: null,
         excludeSlots: [],
         rateLimitPct: 100,
+        strategy: "round-robin",
         prewarmArgs: ["--version"],
         refreshIntervalMs: 60000,
         bootWarmTimeoutMs: 30000,
@@ -173,6 +174,34 @@ describe("parseConfig", () => {
 
     it("throws if bootWarmTimeoutMs is not a number", () => {
       expect(() => parseConfig({ bootWarmTimeoutMs: "30000" })).toThrow();
+    });
+  });
+
+  describe("overrides — strategy", () => {
+    it("defaults to round-robin", () => {
+      expect(parseConfig({}).strategy).toBe("round-robin");
+    });
+
+    it("accepts least-used", () => {
+      expect(parseConfig({ strategy: "least-used" }).strategy).toBe("least-used");
+    });
+
+    it("accepts round-robin explicitly", () => {
+      expect(parseConfig({ strategy: "round-robin" }).strategy).toBe("round-robin");
+    });
+  });
+
+  describe("validation — strategy", () => {
+    it("throws on invalid string", () => {
+      expect(() => parseConfig({ strategy: "best" })).toThrow();
+    });
+
+    it("throws on number", () => {
+      expect(() => parseConfig({ strategy: 42 })).toThrow();
+    });
+
+    it("throws on null", () => {
+      expect(() => parseConfig({ strategy: null })).toThrow();
     });
   });
 

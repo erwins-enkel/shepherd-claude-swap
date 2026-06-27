@@ -83,6 +83,19 @@ describe("buildStatus — config section", () => {
     const c = s["config"] as Record<string, unknown>;
     expect(c["rateLimitPct"]).toBe(80);
   });
+
+  it("config.strategy is 'round-robin' for default cfg", () => {
+    const s = buildStatus(cfg, pool, ready, baseState, null, null);
+    const c = s["config"] as Record<string, unknown>;
+    expect(c["strategy"]).toBe("round-robin");
+  });
+
+  it("config.strategy is 'least-used' when parseConfig({ strategy: 'least-used' })", () => {
+    const customCfg = parseConfig({ strategy: "least-used" });
+    const s = buildStatus(customCfg, pool, ready, baseState, null, null);
+    const c = s["config"] as Record<string, unknown>;
+    expect(c["strategy"]).toBe("least-used");
+  });
 });
 
 // ---------------------------------------------------------------------------

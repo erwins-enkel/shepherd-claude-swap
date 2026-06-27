@@ -503,6 +503,67 @@ describe("register — routes", () => {
 });
 
 // ───────────────────────────────────────────────────────────────────────────
+// Strategy: least-used
+// ───────────────────────────────────────────────────────────────────────────
+
+/** Account 1 has high fiveHour pct, account 2 has low — makes least-used diverge
+ *  from round-robin (cursor=0 would pick account 1). */
+const highLowUsageList = {
+  schemaVersion: 1,
+  activeAccountNumber: 99,
+  accounts: [
+    {
+      number: 1,
+      email: "acct1@example.com",
+      active: false,
+      usageStatus: "ok",
+      usage: { fiveHour: { pct: 80 }, sevenDay: { pct: 0 } },
+    },
+    {
+      number: 2,
+      email: "acct2@example.com",
+      active: false,
+      usageStatus: "ok",
+      usage: { fiveHour: { pct: 5 }, sevenDay: { pct: 0 } },
+    },
+  ],
+};
+
+describe("register — strategy: least-used", () => {
+  it("least-used picks account 2 (lower pct) not account 1 (cursor=0 round-robin pick)", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true, listResult: highLowUsageList });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx({ config: { strategy: "least-used" } });
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    runHook(fc.getHook(), "s1");
+    const assignments = JSON.parse(fc.store.get("assignments")!) as Record<string, number>;
+    expect(assignments["s1"]).toBe(2);
+  });
+
+  it("round-robin (default) picks account 1 first from same fixture — proves strategy switches behavior", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true, listResult: highLowUsageList });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx({ config: {} });
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    runHook(fc.getHook(), "s1");
+    const assignments = JSON.parse(fc.store.get("assignments")!) as Record<string, number>;
+    expect(assignments["s1"]).toBe(1);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
 // Teardown
 // ───────────────────────────────────────────────────────────────────────────
 

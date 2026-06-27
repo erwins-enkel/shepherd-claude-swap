@@ -5,7 +5,8 @@ managed by [`cswap`](https://github.com/realiti4/claude-swap). On each `onSpawn`
 assigns an account from the pool and injects that account's isolated `CLAUDE_CONFIG_DIR`
 (`credentialDir` in the `SpawnPatch`). Assignments are sticky per session: every resume of a
 session lands on the same account it was created under. New sessions are distributed
-round-robin over usable, ready accounts. When no account is usable the spawn is hard-blocked
+round-robin over usable, ready accounts by default, or by most-remaining-quota when the
+`least-used` strategy is enabled. When no account is usable the spawn is hard-blocked
 rather than silently falling back to the default login.
 
 See [docs/PRD.md](docs/PRD.md) for full background and design rationale.
@@ -61,16 +62,17 @@ Edit `~/.shepherd/plugins/claude-swap/config.json` to override any defaults (see
 
 All fields are optional — the shipped `config.json` sets every default explicitly.
 
-| Field               | Type               | Default         | Meaning                                                                                                                          |
-| ------------------- | ------------------ | --------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `cswapBin`          | `string`           | `"cswap"`       | `cswap` binary name or absolute path.                                                                                            |
-| `includeSlots`      | `number[] \| null` | `null`          | Account numbers eligible for the pool. `null` = all accounts.                                                                    |
-| `excludeSlots`      | `number[]`         | `[]`            | Account numbers always excluded from the pool.                                                                                   |
-| `rateLimitPct`      | `number`           | `100`           | Accounts with a 5-hour or 7-day usage `pct` ≥ this value are treated as rate-limited and skipped for new sessions. Range 0–1000. |
-| `prewarmArgs`       | `string[]`         | `["--version"]` | Args passed after `cswap run <N> --` to bootstrap a session profile. `--version` exits instantly with no quota usage.            |
-| `refreshIntervalMs` | `number`           | `60000`         | Background `cswap --list` refresh + stale-profile re-warm interval (ms).                                                         |
-| `bootWarmTimeoutMs` | `number`           | `30000`         | Max time (ms) the plugin waits for ≥1 account to become ready at boot before unblocking HTTP.                                    |
-| `abortOnEmpty`      | `boolean`          | `true`          | Hard-block spawns (`ctx.abortSpawn`) when no usable account is available. Set `false` to fail-open (not recommended).            |
+| Field               | Type                            | Default         | Meaning                                                                                                                                                                                                                                                   |
+| ------------------- | ------------------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cswapBin`          | `string`                        | `"cswap"`       | `cswap` binary name or absolute path.                                                                                                                                                                                                                     |
+| `includeSlots`      | `number[] \| null`              | `null`          | Account numbers eligible for the pool. `null` = all accounts.                                                                                                                                                                                             |
+| `excludeSlots`      | `number[]`                      | `[]`            | Account numbers always excluded from the pool.                                                                                                                                                                                                            |
+| `rateLimitPct`      | `number`                        | `100`           | Accounts with a 5-hour or 7-day usage `pct` ≥ this value are treated as rate-limited and skipped for new sessions. Range 0–1000.                                                                                                                          |
+| `strategy`          | `"round-robin" \| "least-used"` | `"round-robin"` | New-session selection strategy. `round-robin` spreads sessions evenly across eligible accounts. `least-used` assigns the eligible account with the most remaining quota (lowest `max(5h, 7d)` usage). Resume always reuses the pinned account regardless. |
+| `prewarmArgs`       | `string[]`                      | `["--version"]` | Args passed after `cswap run <N> --` to bootstrap a session profile. `--version` exits instantly with no quota usage.                                                                                                                                     |
+| `refreshIntervalMs` | `number`                        | `60000`         | Background `cswap --list` refresh + stale-profile re-warm interval (ms).                                                                                                                                                                                  |
+| `bootWarmTimeoutMs` | `number`                        | `30000`         | Max time (ms) the plugin waits for ≥1 account to become ready at boot before unblocking HTTP.                                                                                                                                                             |
+| `abortOnEmpty`      | `boolean`                       | `true`          | Hard-block spawns (`ctx.abortSpawn`) when no usable account is available. Set `false` to fail-open (not recommended).                                                                                                                                     |
 
 ---
 
@@ -225,9 +227,10 @@ diff /tmp/before.json /tmp/after.json
   reimport accounts, predict rate-limit exhaustion beyond what `cswap` reports, or support
   multi-host coordination. See [docs/PRD.md §3](docs/PRD.md) for the full non-goals list.
 
-- **Selection is round-robin, not quota-aware.** New sessions rotate through eligible
-  accounts in order — the plugin does not yet pick the least-used / most-remaining-quota
-  account. An opt-in `least-used` strategy is specced as a follow-up: [#3](../../issues/3).
+- **Selection strategy is configurable.** New sessions default to round-robin across
+  eligible accounts. Set `strategy: "least-used"` to instead assign the account with the
+  most remaining quota (lowest `max(5h, 7d)` usage). Resume is always sticky to the pinned
+  account either way.
 
 - **`cswap` profile-path coupling.** The plugin derives the session-profile path from
   `cswap`'s documented scheme (`sessions/<N>-<emailSlug>/`). If `cswap` changes its layout
