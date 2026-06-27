@@ -98,6 +98,8 @@ export interface PluginContext {
   events: { subscribe(fn: (event: string, data: unknown) => void): () => void };
   /** Push a small free-form JSON blob to the status panel (rendered verbatim). */
   publishStatus(status: unknown): void;
+  /** Push a declarative UI view (issue #1185); optional — host may be older. */
+  publishUI?(view: PluginUIView | null): void;
   /** Durable, scoped per-plugin key/value (backed by the `plugin_state` table). */
   state: PluginState;
   /** Register an HTTP route under the fixed `/api/plugins/<id>/<path>` namespace. */
@@ -108,6 +110,21 @@ export interface PluginContext {
   config: Record<string, unknown>;
   /** Hard-block the in-flight spawn (opt out of the default fail-open). Throws. */
   abortSpawn(reason: string): never;
+}
+
+// ── Declarative UI descriptor (issue #1185) — mirrors shepherd src/plugins/types.ts ──
+/** A node in the declarative UI tree rendered by the Shepherd host. */
+export interface PluginUINode {
+  type: string;
+  props?: Record<string, unknown>;
+  children?: PluginUINode[];
+}
+/** Declarative UI view pushed via `publishUI`; host renders from its component registry. */
+export interface PluginUIView {
+  schemaVersion: 1;
+  slot: "settings-panel" | "session-sidebar" | "dashboard-card";
+  title?: string;
+  root: PluginUINode;
 }
 
 /** Plugin entry contract: the entry module exports `register`, called ONCE at boot

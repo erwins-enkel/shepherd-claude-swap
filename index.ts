@@ -14,6 +14,7 @@ import { Cswap, type Runner } from "./src/cswap";
 import { cswapBackupRoot, sessionProfileDir } from "./src/paths";
 import { assign, type SelectionState } from "./src/selection";
 import { buildStatus, type LastSpawn } from "./src/status";
+import { buildUIView } from "./src/ui-view";
 import { Prewarmer } from "./src/prewarm";
 
 /** Optional injected dependencies — the testability seam. Shepherd calls `register(ctx)`
@@ -71,6 +72,11 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
     ctx.publishStatus(
       buildStatus(cfg, prewarmer.pool, prewarmer.ready, state, lastSpawn, prewarmer.lastError),
     );
+    if (typeof ctx.publishUI === "function") {
+      ctx.publishUI(
+        buildUIView(cfg, prewarmer.pool, prewarmer.ready, state, lastSpawn, prewarmer.lastError),
+      );
+    }
   };
 
   // ── Boot: list the pool, then await boot-warm of ≥1 account (the spawn-acceptance gate).
