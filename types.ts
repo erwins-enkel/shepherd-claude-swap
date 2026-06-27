@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // VENDORED from Shepherd — github.com/erwins-enkel/shepherd
 //   path:    src/plugins/types.ts
-//   commit:  9124026a13479ca1d30173bf1f523e8950587051
+//   commit:  b6e0d03233e4cb88f69566f738be95e19d72c0b7
 //   license: Apache-2.0 (see NOTICE). Redistributed with attribution; the
 //            upstream plugin docs explicitly endorse vendoring this contract.
 // Do not edit by hand — re-vendor from the pinned commit to update. The plugin
@@ -116,9 +116,10 @@ export type PluginRegister = (
   ctx: PluginContext,
 ) => void | (() => void) | Promise<void | (() => void)>;
 
-/** Thrown by `ctx.abortSpawn`; caught in the spawn path and converted to a hold so it
- *  rides the existing auto-refuse machinery (create rolls back, resume returns null)
- *  rather than escaping as an unhandled throw. */
+/** Thrown by `ctx.abortSpawn`; caught in the spawn path. A plugin-refused **New-Task
+ *  create** is parked in the `held_tasks` queue (reason `'capacity'`) and retried when
+ *  the sweeper next fires — the task is not lost. A plugin-refused **resume** still
+ *  returns null (caller skips / 409) rather than escaping as an unhandled throw. */
 export class PluginSpawnAborted extends Error {
   constructor(
     public readonly reason: string,

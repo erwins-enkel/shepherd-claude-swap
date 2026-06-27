@@ -4,7 +4,7 @@ Copyright 2026 Patrick Lenz
 This product vendors one file from Shepherd (https://github.com/erwins-enkel/shepherd),
 licensed under the Apache License, Version 2.0:
 
-  types.ts  ←  src/plugins/types.ts @ 9124026a13479ca1d30173bf1f523e8950587051
+  types.ts  ←  src/plugins/types.ts @ b6e0d03233e4cb88f69566f738be95e19d72c0b7
 
 The full Apache-2.0 license text is available at:
   https://www.apache.org/licenses/LICENSE-2.0

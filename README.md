@@ -6,8 +6,9 @@ assigns an account from the pool and injects that account's isolated `CLAUDE_CON
 (`credentialDir` in the `SpawnPatch`). Assignments are sticky per session: every resume of a
 session lands on the same account it was created under. New sessions are distributed
 round-robin over usable, ready accounts by default, or by most-remaining-quota when the
-`least-used` strategy is enabled. When no account is usable the spawn is hard-blocked
-rather than silently falling back to the default login.
+`least-used` strategy is enabled. When no account is usable the spawn is refused rather
+than silently falling back to the default login — Shepherd holds and retries a refused
+create until an account frees (no task loss), while a non-forced resume is hard-blocked.
 
 See [docs/PRD.md](docs/PRD.md) for full background and design rationale.
 
@@ -72,7 +73,7 @@ All fields are optional — the shipped `config.json` sets every default explici
 | `prewarmArgs`       | `string[]`                      | `["--version"]` | Args passed after `cswap run <N> --` to bootstrap a session profile. `--version` exits instantly with no quota usage.                                                                                                                                     |
 | `refreshIntervalMs` | `number`                        | `60000`         | Background `cswap --list` refresh + stale-profile re-warm interval (ms).                                                                                                                                                                                  |
 | `bootWarmTimeoutMs` | `number`                        | `30000`         | Max time (ms) the plugin waits for ≥1 account to become ready at boot before unblocking HTTP.                                                                                                                                                             |
-| `abortOnEmpty`      | `boolean`                       | `true`          | Hard-block spawns (`ctx.abortSpawn`) when no usable account is available. Set `false` to fail-open (not recommended).                                                                                                                                     |
+| `abortOnEmpty`      | `boolean`                       | `true`          | Refuse spawns (`ctx.abortSpawn`) when no usable account is available — Shepherd then holds and retries a refused create (no task loss) and hard-blocks a non-forced resume. Set `false` to fail-open (not recommended).                                    |
 
 ---
 
@@ -193,14 +194,16 @@ claude auth status --json | jq '{email: .email}'
 # Expected: same email as in step (a) for session A.
 ```
 
-### (c) All accounts rate-limited → create is blocked
+### (c) All accounts rate-limited → create is held and retried
 
 Temporarily set `rateLimitPct: 0` in `config.json` (treats all accounts as rate-limited),
 then restart Shepherd. Create a session from the **Shepherd Web UI** (or `POST /api/sessions`):
 
 ```sh
-# Expected: session creation is refused — no agent launched, worktree rolled back.
-# Restore rateLimitPct to 100 and restart when done.
+# Expected: session creation is refused — no agent launched, but the task is NOT lost:
+# Shepherd parks the create in its hold queue (reason='capacity'). With rateLimitPct:0 no
+# account ever frees, so the create stays held across sweeps. Restore rateLimitPct to 100
+# and restart — a later sweep then finds a usable account and the held create proceeds.
 ```
 
 ### (d) Boot/background warm cycle burns no quota
@@ -248,7 +251,8 @@ diff /tmp/before.json /tmp/after.json
 
 - **Rate-limited accounts are skipped** for new assignments (5h or 7d `pct ≥ rateLimitPct`),
   as reported by `cswap --list --json`. If every non-active account is rate-limited, new
-  creates are hard-blocked until one frees up.
+  creates are refused and held in Shepherd's hold queue, retried until one frees up (no task
+  loss); a non-forced resume is hard-blocked.
 
 - **No hot-reload.** Plugins load at boot only (Shepherd's design). Config changes require
   `systemctl --user restart shepherd`.
