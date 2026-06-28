@@ -9,9 +9,12 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
+    "verify": "tsc --noEmit && eslint . && prettier --check . && bun test && fallow audit --base origin/main",
     "prepare": "husky"
   },
   "devDependencies": {
+    "@commitlint/cli": "^21.1.0",
+    "@commitlint/config-conventional": "^21.1.0",
     "@types/bun": "latest",
     "eslint": "^9.0.0",
     "fallow": "^2.103.0",

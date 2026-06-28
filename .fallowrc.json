@@ -1,8 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
-  "entry": [
-    "index.ts"
-  ],
+  "entry": ["index.ts"],
   "ignoreExports": [
     {
       // types.ts is vendored from Shepherd core (do not edit by hand).

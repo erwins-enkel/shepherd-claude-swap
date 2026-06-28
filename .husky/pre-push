@@ -1,0 +1,2 @@
+git fetch -q origin main || true
+bun run verify
