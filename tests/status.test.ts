@@ -18,6 +18,12 @@ function makeAccount(number: number, opts: Partial<PoolAccount> = {}): PoolAccou
     reason: null,
     fiveHourPct: 10,
     sevenDayPct: 20,
+    fiveHourResetsAt: null,
+    sevenDayResetsAt: null,
+    fiveHourResetClock: null,
+    sevenDayResetClock: null,
+    fiveHourResetCountdown: null,
+    sevenDayResetCountdown: null,
     active: true,
     usageUnavailable: false,
     ...opts,
@@ -123,7 +129,20 @@ describe("buildStatus — pool section", () => {
       expect(entry).toHaveProperty("sevenDayPct");
       expect(entry).toHaveProperty("ready");
       expect(entry).toHaveProperty("usageUnavailable");
+      expect(entry).toHaveProperty("fiveHourResetsAt");
+      expect(entry).toHaveProperty("sevenDayResetsAt");
     }
+  });
+
+  it("pool entry carries resetsAt values (ISO or null)", () => {
+    const withReset = makeAccount(1, {
+      fiveHourResetsAt: "2026-06-27T20:00:00.277424+00:00",
+      sevenDayResetsAt: null,
+    });
+    const s = buildStatus(cfg, [withReset], new Set([1]), baseState, null, null);
+    const p = s["pool"] as Record<string, unknown>[];
+    expect(p[0]?.["fiveHourResetsAt"]).toBe("2026-06-27T20:00:00.277424+00:00");
+    expect(p[0]?.["sevenDayResetsAt"]).toBeNull();
   });
 
   it("pool entry 'ready' reflects ready Set: acct 1 ready, acct 2 not ready", () => {

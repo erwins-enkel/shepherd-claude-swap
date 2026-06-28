@@ -11,6 +11,20 @@ function identityBadge(number: number, email: string): PluginUINode {
   return { type: "badge", props: { label: `#${number} ${email}`, tone: "neutral" } };
 }
 
+/** Reset suffix for a quota caption. Anchored on the absolute `clock` (non-drifting); the
+ *  relative `countdown` is appended in parens when present. Empty when no clock is available. */
+function resetSuffix(clock: string | null, countdown: string | null): string {
+  if (clock === null) return "";
+  return countdown !== null ? ` · resets ${clock} (${countdown})` : ` · resets ${clock}`;
+}
+
+/** Caption for a quota meter/gauge: `<pct>%` plus reset suffix, or `n/a` when pct is unknown.
+ *  Gating on `pct !== null` keeps null-pct windows rendering exactly `"n/a"`. */
+function quotaCaption(pct: number | null, clock: string | null, countdown: string | null): string {
+  if (pct === null) return "n/a";
+  return `${pct}%${resetSuffix(clock, countdown)}`;
+}
+
 /** Build a `settings-panel` PluginUIView with the same data as buildStatus. */
 export function buildUIView(
   cfg: ResolvedConfig,
@@ -60,8 +74,16 @@ export function buildUIView(
 
       const fivePct = acct.fiveHourPct ?? 0;
       const sevenPct = acct.sevenDayPct ?? 0;
-      const fiveCaption = acct.fiveHourPct !== null ? `${acct.fiveHourPct}%` : "n/a";
-      const sevenCaption = acct.sevenDayPct !== null ? `${acct.sevenDayPct}%` : "n/a";
+      const fiveCaption = quotaCaption(
+        acct.fiveHourPct,
+        acct.fiveHourResetClock,
+        acct.fiveHourResetCountdown,
+      );
+      const sevenCaption = quotaCaption(
+        acct.sevenDayPct,
+        acct.sevenDayResetClock,
+        acct.sevenDayResetCountdown,
+      );
       const fiveTone = fivePct >= cfg.rateLimitPct ? "error" : "ok";
       const sevenTone = sevenPct >= cfg.rateLimitPct ? "error" : "ok";
 
@@ -160,9 +182,10 @@ export function buildUIView(
 
   const fivePctFor = (a: PoolAccount) => a.fiveHourPct ?? 0;
   const sevenPctFor = (a: PoolAccount) => a.sevenDayPct ?? 0;
-  const fiveCaptionFor = (a: PoolAccount) => (a.fiveHourPct !== null ? `${a.fiveHourPct}%` : "n/a");
+  const fiveCaptionFor = (a: PoolAccount) =>
+    quotaCaption(a.fiveHourPct, a.fiveHourResetClock, a.fiveHourResetCountdown);
   const sevenCaptionFor = (a: PoolAccount) =>
-    a.sevenDayPct !== null ? `${a.sevenDayPct}%` : "n/a";
+    quotaCaption(a.sevenDayPct, a.sevenDayResetClock, a.sevenDayResetCountdown);
   const toneFor = (pct: number) => (pct >= cfg.rateLimitPct ? "error" : "ok");
   const quotaPointsFor = (a: PoolAccount) =>
     downsample(
