@@ -23,6 +23,44 @@ interface RunnerCall {
   args: string[];
 }
 
+/** Handle the --switch / --switch-to branch of the fake runner. */
+async function fakeRunnerSwitch(
+  args: string[],
+  opts?: { switchBlockOn?: Promise<void>; switchError?: boolean },
+): Promise<{ stdout: string; stderr: string; code: number; timedOut: boolean }> {
+  if (opts?.switchBlockOn) await opts.switchBlockOn;
+  if (opts?.switchError) {
+    return {
+      stdout: JSON.stringify({
+        schemaVersion: 1,
+        error: { type: "no_available_account", message: "switch error" },
+      }),
+      stderr: "",
+      code: 0,
+      timedOut: false,
+    };
+  }
+  const isSpecific = args[0] === "--switch-to";
+  const toNumber = isSpecific ? Number(args[1]) : 2;
+  const stratIdx = args.indexOf("--strategy");
+  const strategy = stratIdx >= 0 ? (args[stratIdx + 1] ?? "rotation") : "rotation";
+  return {
+    stdout: JSON.stringify({
+      schemaVersion: 1,
+      switched: true,
+      from: { number: 3, email: "a@x.com" },
+      to: { number: toNumber, email: "b@x.com" },
+      strategy,
+      reason: "switched",
+      message: "switched ok",
+      warnings: [],
+    }),
+    stderr: "",
+    code: 0,
+    timedOut: false,
+  };
+}
+
 /** Fake Runner that branches on argv: `--list` returns the fixture, `run` returns
  *  a configurable prewarm result, `--switch`/`--switch-to` returns a valid switch
  *  envelope (or an error envelope if `switchError` is true). Records every call. */
@@ -40,7 +78,6 @@ function makeFakeRunner(opts?: {
   const prewarmOk = opts?.prewarmOk ?? true;
   const listResult = opts?.listResult ?? fixtureRaw;
   const calls: RunnerCall[] = [];
-  // fallow-ignore-next-line complexity
   const runner: Runner = async (bin, args) => {
     calls.push({ bin, args: [...args] });
     if (args[0] === "--list") {
@@ -52,37 +89,7 @@ function makeFakeRunner(opts?: {
         : { stdout: "", stderr: "warm failed", code: 1, timedOut: false };
     }
     if (args[0] === "--switch" || args[0] === "--switch-to") {
-      if (opts?.switchBlockOn) await opts.switchBlockOn;
-      if (opts?.switchError) {
-        return {
-          stdout: JSON.stringify({
-            schemaVersion: 1,
-            error: { type: "no_available_account", message: "switch error" },
-          }),
-          stderr: "",
-          code: 0,
-          timedOut: false,
-        };
-      }
-      const isSpecific = args[0] === "--switch-to";
-      const toNumber = isSpecific ? Number(args[1]) : 2;
-      const stratIdx = args.indexOf("--strategy");
-      const strategy = stratIdx >= 0 ? (args[stratIdx + 1] ?? "rotation") : "rotation";
-      return {
-        stdout: JSON.stringify({
-          schemaVersion: 1,
-          switched: true,
-          from: { number: 3, email: "a@x.com" },
-          to: { number: toNumber, email: "b@x.com" },
-          strategy,
-          reason: "switched",
-          message: "switched ok",
-          warnings: [],
-        }),
-        stderr: "",
-        code: 0,
-        timedOut: false,
-      };
+      return fakeRunnerSwitch(args, opts);
     }
     return { stdout: "", stderr: "", code: 0, timedOut: false };
   };

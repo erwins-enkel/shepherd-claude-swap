@@ -40,6 +40,39 @@ const defaultSetInterval: NonNullable<PluginDeps["setInterval"]> = (fn, ms) => {
   return handle;
 };
 
+type SwitchPrimaryParsed =
+  | { ok: false; response: Response }
+  | { ok: true; mode: "specific" | "next" | "best"; account: number | string | undefined };
+
+/** Parse + validate the POST switch-primary body. Returns ok:false with a ready 4xx Response on error. */
+function parseSwitchPrimaryBody(body: unknown): SwitchPrimaryParsed {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const mode = b["mode"];
+  if (mode !== "specific" && mode !== "next" && mode !== "best") {
+    return {
+      ok: false,
+      response: Response.json(
+        { ok: false, error: 'invalid "mode": expected "specific" | "next" | "best"' },
+        { status: 400 },
+      ),
+    };
+  }
+  if (mode === "specific") {
+    const acct = b["account"];
+    if (typeof acct !== "number" && !(typeof acct === "string" && acct.length > 0)) {
+      return {
+        ok: false,
+        response: Response.json(
+          { ok: false, error: 'mode "specific" requires "account" (number or non-empty string)' },
+          { status: 400 },
+        ),
+      };
+    }
+    return { ok: true, mode, account: acct as number | string };
+  }
+  return { ok: true, mode, account: undefined };
+}
+
 /**
  * Plugin entry. Returns a teardown that clears the background interval and best-effort
  * awaits in-flight warms. `register` runs BEFORE Shepherd serves HTTP, so awaiting the
@@ -167,7 +200,6 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
     publish();
     return Response.json({ ok: true, cleared: true });
   });
-  // fallow-ignore-next-line complexity
   ctx.route("POST", "switch-primary", async (req): Promise<Response> => {
     // Body-parse guard — malformed/missing body fails closed (distinct from the switch try/catch).
     let body: unknown;
@@ -176,25 +208,9 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
     } catch {
       return Response.json({ ok: false, error: "invalid JSON body" }, { status: 400 });
     }
-    const b = (body ?? {}) as Record<string, unknown>;
-    const mode = b["mode"];
-    if (mode !== "specific" && mode !== "next" && mode !== "best") {
-      return Response.json(
-        { ok: false, error: 'invalid "mode": expected "specific" | "next" | "best"' },
-        { status: 400 },
-      );
-    }
-    let account: number | string | undefined;
-    if (mode === "specific") {
-      const acct = b["account"];
-      if (typeof acct !== "number" && !(typeof acct === "string" && acct.length > 0)) {
-        return Response.json(
-          { ok: false, error: 'mode "specific" requires "account" (number or non-empty string)' },
-          { status: 400 },
-        );
-      }
-      account = acct as number | string;
-    }
+    const parsed = parseSwitchPrimaryBody(body);
+    if (!parsed.ok) return parsed.response;
+    const { mode, account } = parsed;
 
     // Operator-triggered global switch — NEVER on the onSpawn hot path. The Prewarmer guard +
     // ready clear/drop close the switch↔onSpawn race; the tick is gated above.

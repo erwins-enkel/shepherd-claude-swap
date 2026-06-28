@@ -78,6 +78,23 @@ const defaultRunner: Runner = async (bin, args, { timeoutMs }) => {
 const DEFAULT_LIST_TIMEOUT_MS = 30_000;
 const DEFAULT_SWITCH_TIMEOUT_MS = 30_000;
 
+/**
+ * Extract the error message from a cswap JSON response envelope, or return null if no error.
+ * Handles both structured ({error:{type,message}}) and plain-string ({error:string}) forms.
+ */
+function cswapErrorMessage(obj: Record<string, unknown>): string | null {
+  // Documented structured error envelope: {schemaVersion, error: {type, message}}
+  if (typeof obj["error"] === "object" && obj["error"] !== null) {
+    const err = obj["error"] as Record<string, unknown>;
+    return `cswap error: ${String(err["type"])}: ${String(err["message"])}`;
+  }
+  // Defensive: plain string error (mirrors list() discipline)
+  if (typeof obj["error"] === "string") {
+    return `cswap error: ${obj["error"]}`;
+  }
+  return null;
+}
+
 export class Cswap {
   private readonly bin: string;
   private readonly runner: Runner;
@@ -193,14 +210,9 @@ export class Cswap {
 
     const obj = parsed as Record<string, unknown>;
 
-    // Documented structured error envelope: {schemaVersion, error: {type, message}}
-    if (typeof obj["error"] === "object" && obj["error"] !== null) {
-      const err = obj["error"] as Record<string, unknown>;
-      throw new Error(`cswap error: ${String(err["type"])}: ${String(err["message"])}`);
-    }
-    // Defensive: plain string error (mirrors list() discipline)
-    if (typeof obj["error"] === "string") {
-      throw new Error(`cswap error: ${obj["error"]}`);
+    const errMsg = cswapErrorMessage(obj);
+    if (errMsg !== null) {
+      throw new Error(errMsg);
     }
 
     if (obj["schemaVersion"] !== 1) {

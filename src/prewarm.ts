@@ -5,6 +5,11 @@ import type { Cswap } from "./cswap";
 import { classifyPool, type PoolAccount } from "./accounts";
 import { sessionProfileDir } from "./paths";
 
+/** Returns true if an account should NOT remain in the ready set (gone, unusable, rate-limited, or now active). */
+function isUnassignable(acct: PoolAccount | undefined): boolean {
+  return !acct || !acct.usable || acct.rateLimited || acct.active;
+}
+
 export interface PrewarmerDeps {
   cswap: Cswap;
   cfg: ResolvedConfig;
@@ -62,8 +67,7 @@ export class Prewarmer {
       const list = await this.cswap.list();
       this.pool = classifyPool(list, this.cfg);
       for (const n of [...this.ready]) {
-        const acct = this.pool.find((a) => a.number === n);
-        if (!acct || !acct.usable || acct.rateLimited || acct.active) {
+        if (isUnassignable(this.pool.find((a) => a.number === n))) {
           this.ready.delete(n);
         }
       }
