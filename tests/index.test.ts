@@ -1284,4 +1284,44 @@ describe("register — POST switch-primary", () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(calls.filter((c) => c.args[0] === "--list").length).toBeGreaterThan(listAfterSwitch);
   });
+
+  it("rejects a concurrent switch with 409 while one is in-flight; first still completes", async () => {
+    let resolveSwitch!: () => void;
+    const switchBlockOn = new Promise<void>((resolve) => {
+      resolveSwitch = resolve;
+    });
+
+    const { runner, calls } = makeFakeRunner({ prewarmOk: true, switchBlockOn });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    const handler = fc.routes.get("POST switch-primary")!;
+
+    // First switch — runner blocks past beginSwitch(), so the guard is held.
+    const first = handler(makeSwitchReq({ mode: "next" }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    const switchCallsWhileBlocked = calls.filter((c) => c.args[0] === "--switch").length;
+
+    // Second switch while the first is in-flight → 409, and it must NOT invoke cswap or touch state.
+    const second = await handler(makeSwitchReq({ mode: "best" }));
+    expect(second.status).toBe(409);
+    expect(((await second.json()) as { ok: boolean }).ok).toBe(false);
+    // No additional cswap switch subprocess was started by the rejected request.
+    expect(calls.filter((c) => c.args[0] === "--switch").length).toBe(switchCallsWhileBlocked);
+
+    // First completes normally; guard releases.
+    resolveSwitch();
+    expect((await first).status).toBe(200);
+
+    // A new switch now succeeds (guard was released).
+    const third = await handler(makeSwitchReq({ mode: "next" }));
+    expect(third.status).toBe(200);
+  });
 });

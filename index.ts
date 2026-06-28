@@ -10,7 +10,7 @@
 
 import type { PluginContext, SpawnPatch } from "./types";
 import { parseConfig } from "./src/config";
-import { Cswap, type Runner } from "./src/cswap";
+import { Cswap, type Runner, type CswapSwitchResult } from "./src/cswap";
 import { History } from "./src/history";
 import { cswapBackupRoot, sessionProfileDir } from "./src/paths";
 import { assign, type SelectionState } from "./src/selection";
@@ -71,6 +71,29 @@ function parseSwitchPrimaryBody(body: unknown): SwitchPrimaryParsed {
     return { ok: true, mode, account: acct as number | string };
   }
   return { ok: true, mode, account: undefined };
+}
+
+/**
+ * Prep `ready` then invoke the cswap switch for the given mode. The `ready` mutation is
+ * synchronous and runs BEFORE the cswap call (the caller invokes this immediately after
+ * `beginSwitch()`, with no `await` between), so the switch↔onSpawn race stays closed:
+ * specific-by-number drops only the target (other accounts stay assignable); a string/email
+ * target or next/best clears the whole set (target number unknown / unsafe to resolve).
+ */
+function executeSwitch(
+  prewarmer: Prewarmer,
+  cswap: Cswap,
+  mode: "specific" | "next" | "best",
+  account: number | string | undefined,
+): Promise<CswapSwitchResult> {
+  if (mode === "specific" && typeof account === "number") {
+    prewarmer.dropReady(account);
+  } else {
+    prewarmer.clearReady();
+  }
+  if (mode === "specific") return cswap.switchTo(account as number | string);
+  if (mode === "best") return cswap.switch("best");
+  return cswap.switch(); // "next" → plain rotation
 }
 
 /**
@@ -212,25 +235,23 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
     if (!parsed.ok) return parsed.response;
     const { mode, account } = parsed;
 
+    // Reject concurrent switches. beginSwitch/endSwitch is a non-reentrant boolean, so a second
+    // in-flight switch would let the first's `finally` clear `switching` while the second's cswap
+    // subprocess is still running — re-enabling the tick/warmStale mid-switch and reopening the
+    // race. The single event loop + no `await` between this check and beginSwitch() below makes the
+    // claim atomic, so only one switch can hold the guard at a time.
+    if (prewarmer.isSwitching) {
+      return Response.json(
+        { ok: false, error: "a primary switch is already in progress" },
+        { status: 409 },
+      );
+    }
+
     // Operator-triggered global switch — NEVER on the onSpawn hot path. The Prewarmer guard +
-    // ready clear/drop close the switch↔onSpawn race; the tick is gated above.
+    // ready clear/drop (in executeSwitch) close the switch↔onSpawn race; the tick is gated above.
     prewarmer.beginSwitch();
     try {
-      // specific-by-number: drop only the target (other accounts stay assignable, no pool dip).
-      // string (email) target or next/best: full clear (target number unknown / unsafe to resolve).
-      if (mode === "specific" && typeof account === "number") {
-        prewarmer.dropReady(account);
-      } else {
-        prewarmer.clearReady();
-      }
-
-      const result =
-        mode === "specific"
-          ? await cswap.switchTo(account as number | string)
-          : mode === "best"
-            ? await cswap.switch("best")
-            : await cswap.switch(); // "next" → plain rotation
-
+      const result = await executeSwitch(prewarmer, cswap, mode, account);
       await prewarmer.refresh(); // re-classify (new active pruned by its active flag); publishes via onChange
       return Response.json(result);
     } catch (err) {
