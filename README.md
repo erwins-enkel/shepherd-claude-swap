@@ -99,11 +99,13 @@ worktree is lost; resuming again once the account is warm lands on the same pinn
 **Background loop:** Every `refreshIntervalMs` the pool is re-listed and any usable-but-not-
 ready accounts are re-warmed out of band.
 
-**No global `cswap --switch` is ever called.** Isolation is per-spawn `credentialDir` only,
-so a running agent's credentials are never rotated by a concurrent spawn.
+**No global `cswap --switch` on the hot path.** `onSpawn` uses per-spawn `credentialDir`
+only — a running agent's credentials are never rotated by a concurrent spawn. An
+operator-triggered global switch is available out of band via `POST switch-primary`
+(never called by the hot path).
 
 **Status panel:** Open Settings → Plugins in the Shepherd UI to see per-account 5h/7d quota,
-current session→account assignments, and the last spawn decision in real time. An account whose quota `cswap` cannot currently report shows a **quota unknown** badge instead of a misleading `0%` meter.
+current session→account assignments, and the last spawn decision in real time. An account whose quota `cswap` cannot currently report shows a **quota unknown** badge instead of a misleading `0%` meter. The active ("primary") account shows a **primary** badge. A per-account "Make primary" picker in the panel is a follow-up gated on a host UI capability — tracked by [shepherd#1209](https://github.com/erwins-enkel/shepherd/issues/1209).
 
 **Gear menu:** On Shepherd ≥ 1.39.0 the plugin also contributes a **Claude swap usage** entry to
 the top-bar gear menu (desktop dropdown + mobile sheet). Clicking it opens Settings → Plugins
@@ -155,6 +157,38 @@ agents are unaffected (their `CLAUDE_CONFIG_DIR` is already set). Next new sessi
 round-robin from account 1 again.
 
 Response: `{ "ok": true, "cleared": true }`
+
+### `POST /api/plugins/claude-swap/switch-primary`
+
+Switches cswap's **global active ("primary") account**. Operator-triggered only — never runs
+on the spawn hot path. After a successful switch the pool is refreshed: the newly-active
+account leaves the rotation and the previously-active account is re-warmed in the background
+and rejoins it.
+
+Body: `{ "mode": "specific" | "next" | "best", "account"?: number | string }`
+
+- `specific` — switch to a named account (number or email address). Requires `account`. Runs
+  `cswap --switch-to <account>`.
+- `next` — rotate to the next account in sequence. Runs `cswap --switch`.
+- `best` — switch to the account with the most remaining 5h/7d quota. Runs
+  `cswap --switch --strategy best`.
+
+Responses:
+
+- `200` — the cswap switch result JSON
+  (`{ schemaVersion, switched, from, to, strategy, reason, message, warnings }`; see
+  [`docs/contracts/cswap-switch.sample.json`](docs/contracts/cswap-switch.sample.json)).
+- `400 { "ok": false, "error": … }` — malformed JSON body, or invalid/missing `mode`, or
+  `specific` without `account`.
+- `500 { "ok": false, "error": … }` — the cswap switch (or follow-up pool refresh) failed;
+  selection state is left unchanged.
+
+```sh
+curl -s -X POST -H "Authorization: Bearer $SHEPHERD_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"mode":"best"}' \
+  http://localhost:<port>/api/plugins/claude-swap/switch-primary | jq .
+```
 
 ---
 
@@ -259,8 +293,25 @@ diff /tmp/before.json /tmp/after.json
   account ready, so it is never assigned (the plugin won't inject a non-existent
   `credentialDir`). Consequence: rotation spans your **non-active** accounts. To rotate
   across N accounts, make sure the one `cswap` currently has active is not the only spare —
-  or `cswap --switch-to` an account you don't intend to rotate. Verified end-to-end against
-  live `cswap`; see [docs/contracts/smoke-test-results.md](docs/contracts/smoke-test-results.md).
+  or use `POST switch-primary` (modes `specific`/`next`/`best`) to change the active account
+  from the plugin without reaching for `cswap --switch-to` directly. After a switch the
+  newly-active account leaves the rotation and the previously-active account rejoins it
+  (re-warmed in the background). Verified end-to-end against live `cswap`; see
+  [docs/contracts/smoke-test-results.md](docs/contracts/smoke-test-results.md).
+
+- **Switching the primary account rewrites the global `~/.claude` default login.** This
+  affects ANY `claude` session not running under an isolated `CLAUDE_CONFIG_DIR` — including
+  non-Shepherd terminals and other tools that read `~/.claude`. It does **not** rotate a
+  running Shepherd agent's credentials (agents run under their own isolated session-profile
+  `CLAUDE_CONFIG_DIR`; only the active account uses `~/.claude` as its credential store, and
+  it is excluded from rotation).
+
+- **Operator recovery: pinned session blocked after a switch.** If you switch the primary
+  **to** an account that currently has a live Shepherd session pinned to it, that account's
+  isolated session profile moves into `~/.claude`, so the pinned session can no longer be
+  warmed and its resume aborts ("warming; retry resume"). **Recovery:** switch the primary
+  **away** from that account (to any other account, or `next`/`best`) — this restores its
+  isolated session profile and the pinned session can resume.
 
 - **Rate-limited accounts are skipped** for new assignments (5h or 7d `pct ≥ rateLimitPct`),
   as reported by `cswap --list --json`. If every non-active account is rate-limited, new
