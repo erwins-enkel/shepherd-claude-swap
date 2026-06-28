@@ -4,6 +4,7 @@ import { PluginSpawnAborted } from "../types";
 import type {
   PluginContext,
   PluginUINode,
+  PluginGearItem,
   PluginState,
   SpawnDescriptor,
   SpawnHook,
@@ -77,6 +78,7 @@ interface FakeCtx {
   routes: Map<string, PluginRouteHandler>;
   statuses: unknown[];
   uiViews: unknown[];
+  gearItems: unknown[];
   logs: unknown[][];
   abortReasons: string[];
 }
@@ -106,6 +108,7 @@ function makeFakeCtx(opts?: {
   const routes = new Map<string, PluginRouteHandler>();
   const statuses: unknown[] = [];
   const uiViews: unknown[] = [];
+  const gearItems: unknown[] = [];
   const logs: unknown[][] = [];
   const abortReasons: string[] = [];
 
@@ -127,6 +130,9 @@ function makeFakeCtx(opts?: {
     publishUI(view: unknown) {
       uiViews.push(view);
     },
+    publishGearItem(item: unknown) {
+      gearItems.push(item);
+    },
     state,
     route(method: string, path: string, handler: PluginRouteHandler) {
       routes.set(`${method} ${path}`, handler);
@@ -142,7 +148,17 @@ function makeFakeCtx(opts?: {
     },
   };
 
-  return { ctx, store, getHook: () => spawnHook, routes, statuses, uiViews, logs, abortReasons };
+  return {
+    ctx,
+    store,
+    getHook: () => spawnHook,
+    routes,
+    statuses,
+    uiViews,
+    gearItems,
+    logs,
+    abortReasons,
+  };
 }
 
 function makeDescriptor(sessionId: string): SpawnDescriptor {
@@ -619,6 +635,46 @@ describe("register — teardown", () => {
     (teardown as () => void)();
     expect(timers.cleared).toHaveLength(1);
     expect(timers.cleared[0]).toBe(timers.handles[0]);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Gear-menu item (claude-swap#17; capability from shepherd#1202)
+// ───────────────────────────────────────────────────────────────────────────
+
+describe("register — gear-menu item", () => {
+  it("publishes one panel gear item pointing at the usage view", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    expect(fc.gearItems).toHaveLength(1);
+    const item = fc.gearItems[0] as PluginGearItem;
+    expect(item.label).toBe("Claude swap usage");
+    expect(item.action.kind).toBe("panel");
+  });
+
+  it("loads (returns a teardown fn) when the host lacks publishGearItem", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    // Simulate an older Shepherd build whose ctx has no gear-menu capability.
+    delete (fc.ctx as { publishGearItem?: unknown }).publishGearItem;
+    const teardown = await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    expect(typeof teardown).toBe("function");
+    expect(fc.gearItems).toHaveLength(0);
   });
 });
 

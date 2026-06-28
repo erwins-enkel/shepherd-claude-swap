@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // VENDORED from Shepherd — github.com/erwins-enkel/shepherd
 //   path:    src/plugins/types.ts
-//   commit:  b6e0d03233e4cb88f69566f738be95e19d72c0b7
+//   commit:  1f21237d04473caf37e6f832d6cdde9f970883ee
 //   license: Apache-2.0 (see NOTICE). Redistributed with attribution; the
 //            upstream plugin docs explicitly endorse vendoring this contract.
 // Do not edit by hand — re-vendor from the pinned commit to update. The plugin
@@ -100,6 +100,9 @@ export interface PluginContext {
   publishStatus(status: unknown): void;
   /** Push a declarative UI view (issue #1185); optional — host may be older. */
   publishUI?(view: PluginUIView | null): void;
+  /** Push (or replace) this plugin's single gear-menu item; `null` clears it.
+   *  Additive — plugins guard with `typeof ctx.publishGearItem === "function"`. */
+  publishGearItem?(item: PluginGearItem | null): void;
   /** Durable, scoped per-plugin key/value (backed by the `plugin_state` table). */
   state: PluginState;
   /** Register an HTTP route under the fixed `/api/plugins/<id>/<path>` namespace. */
@@ -125,6 +128,24 @@ export interface PluginUIView {
   slot: "settings-panel" | "session-sidebar" | "dashboard-card";
   title?: string;
   root: PluginUINode;
+}
+
+// ── Gear-menu item (shepherd#1202) — mirrors shepherd src/plugins/types.ts ──
+/** A declarative action a plugin's gear-menu item performs on click. Discriminated by `kind`.
+ *  All fields JSON-serializable; strings are verbatim plugin-authored DATA, never i18n keys. */
+export type PluginGearAction =
+  | { kind: "route"; method: "GET" | "POST"; path: string }
+  | { kind: "url"; href: string }
+  | { kind: "panel" };
+
+/** One gear-menu item a plugin contributes via `ctx.publishGearItem` (shepherd#1202).
+ *  At most ONE per plugin; latest publish wins; `null` clears it. */
+export interface PluginGearItem {
+  /** Verbatim plugin-authored label (NOT an i18n key). */
+  label: string;
+  /** Optional single glyph/emoji icon (verbatim). */
+  icon?: string;
+  action: PluginGearAction;
 }
 
 /** Plugin entry contract: the entry module exports `register`, called ONCE at boot

@@ -105,6 +105,11 @@ so a running agent's credentials are never rotated by a concurrent spawn.
 **Status panel:** Open Settings → Plugins in the Shepherd UI to see per-account 5h/7d quota,
 current session→account assignments, and the last spawn decision in real time. An account whose quota `cswap` cannot currently report shows a **quota unknown** badge instead of a misleading `0%` meter.
 
+**Gear menu:** On Shepherd ≥ 1.39.0 the plugin also contributes a **Claude swap usage** entry to
+the top-bar gear menu (desktop dropdown + mobile sheet). Clicking it opens Settings → Plugins
+scrolled to this plugin's card — the same usage view described above, one click away. On older
+Shepherd builds the entry is simply omitted (the capability is additive).
+
 **Graphical widgets:** the panel also renders per-account quota gauges and sparklines, a cross-account
 quota time-series, a session→account load bar-chart, and a spawn timeline (history is in-memory and
 resets on plugin restart). These use declarative node types rendered by the Shepherd host
