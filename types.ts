@@ -130,7 +130,7 @@ export interface PluginUIView {
   root: PluginUINode;
 }
 
-// ── Gear-menu item (issue #1202) — mirrors shepherd src/plugins/types.ts ──
+// ── Gear-menu item (shepherd#1202) — mirrors shepherd src/plugins/types.ts ──
 /** A declarative action a plugin's gear-menu item performs on click. Discriminated by `kind`.
  *  All fields JSON-serializable; strings are verbatim plugin-authored DATA, never i18n keys. */
 export type PluginGearAction =
@@ -138,7 +138,7 @@ export type PluginGearAction =
   | { kind: "url"; href: string }
   | { kind: "panel" };
 
-/** One gear-menu item a plugin contributes via `ctx.publishGearItem` (issue #1202).
+/** One gear-menu item a plugin contributes via `ctx.publishGearItem` (shepherd#1202).
  *  At most ONE per plugin; latest publish wins; `null` clears it. */
 export interface PluginGearItem {
   /** Verbatim plugin-authored label (NOT an i18n key). */

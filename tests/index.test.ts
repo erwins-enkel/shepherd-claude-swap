@@ -639,7 +639,7 @@ describe("register — teardown", () => {
 });
 
 // ───────────────────────────────────────────────────────────────────────────
-// Gear-menu item (issue #1202)
+// Gear-menu item (claude-swap#17; capability from shepherd#1202)
 // ───────────────────────────────────────────────────────────────────────────
 
 describe("register — gear-menu item", () => {

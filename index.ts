@@ -170,8 +170,9 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
   // Initial status snapshot.
   publish();
 
-  // ── Gear-menu item (issue #1202): one-click into the usage view rendered via `publishUI`
-  // in Settings → Plugins. Additive — guard so the plugin still loads on older Shepherd builds.
+  // ── Gear-menu item (claude-swap#17; capability from shepherd#1202): one-click into the usage
+  // view rendered via `publishUI` in Settings → Plugins. Additive — guard so the plugin still
+  // loads on older Shepherd builds.
   if (typeof ctx.publishGearItem === "function") {
     ctx.publishGearItem({ label: "Claude swap usage", icon: "▦", action: { kind: "panel" } });
   }
