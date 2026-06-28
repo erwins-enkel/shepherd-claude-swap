@@ -24,8 +24,16 @@ interface RunnerCall {
 }
 
 /** Fake Runner that branches on argv: `--list` returns the fixture, `run` returns
- *  a configurable prewarm result. Records every call. */
-function makeFakeRunner(opts?: { prewarmOk?: boolean; listResult?: unknown }): {
+ *  a configurable prewarm result, `--switch`/`--switch-to` returns a valid switch
+ *  envelope (or an error envelope if `switchError` is true). Records every call. */
+function makeFakeRunner(opts?: {
+  prewarmOk?: boolean;
+  listResult?: unknown;
+  /** If true, --switch/--switch-to returns a structured error envelope (throws in wrapper). */
+  switchError?: boolean;
+  /** If provided, --switch/--switch-to awaits this before returning (for tick-gating tests). */
+  switchBlockOn?: Promise<void>;
+}): {
   runner: Runner;
   calls: RunnerCall[];
 } {
@@ -41,6 +49,39 @@ function makeFakeRunner(opts?: { prewarmOk?: boolean; listResult?: unknown }): {
       return prewarmOk
         ? { stdout: "", stderr: "", code: 0, timedOut: false }
         : { stdout: "", stderr: "warm failed", code: 1, timedOut: false };
+    }
+    if (args[0] === "--switch" || args[0] === "--switch-to") {
+      if (opts?.switchBlockOn) await opts.switchBlockOn;
+      if (opts?.switchError) {
+        return {
+          stdout: JSON.stringify({
+            schemaVersion: 1,
+            error: { type: "no_available_account", message: "switch error" },
+          }),
+          stderr: "",
+          code: 0,
+          timedOut: false,
+        };
+      }
+      const isSpecific = args[0] === "--switch-to";
+      const toNumber = isSpecific ? Number(args[1]) : 2;
+      const stratIdx = args.indexOf("--strategy");
+      const strategy = stratIdx >= 0 ? (args[stratIdx + 1] ?? "rotation") : "rotation";
+      return {
+        stdout: JSON.stringify({
+          schemaVersion: 1,
+          switched: true,
+          from: { number: 3, email: "a@x.com" },
+          to: { number: toNumber, email: "b@x.com" },
+          strategy,
+          reason: "switched",
+          message: "switched ok",
+          warnings: [],
+        }),
+        stderr: "",
+        code: 0,
+        timedOut: false,
+      };
     }
     return { stdout: "", stderr: "", code: 0, timedOut: false };
   };
@@ -885,5 +926,333 @@ describe("register — two-tier selection (usage-unavailable e2e)", () => {
     const resumed = runHook(fc.getHook(), "s1") as SpawnPatch;
     expect(resumed.credentialDir).toBeTruthy();
     expect(resumed.credentialDir).toBe(first.credentialDir);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// POST switch-primary
+// ───────────────────────────────────────────────────────────────────────────
+
+/** Build a POST switch-primary request with a JSON body. */
+function makeSwitchReq(body: unknown): Request {
+  return new Request("http://x/switch-primary", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+describe("register — POST switch-primary", () => {
+  it("mode:specific account:N → invokes --switch-to N --json, returns 200, refresh follows", async () => {
+    const { runner, calls } = makeFakeRunner({ prewarmOk: true });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    const handler = fc.routes.get("POST switch-primary")!;
+    const listBefore = calls.filter((c) => c.args[0] === "--list").length;
+
+    const res = await handler(makeSwitchReq({ mode: "specific", account: 5 }));
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { switched: boolean };
+    expect(body.switched).toBe(true);
+    // --switch-to was invoked with exactly the right argv
+    const switchCall = calls.find((c) => c.args[0] === "--switch-to");
+    expect(switchCall?.args).toEqual(["--switch-to", "5", "--json"]);
+    // a follow-up --list (refresh) was issued
+    expect(calls.filter((c) => c.args[0] === "--list").length).toBeGreaterThan(listBefore);
+  });
+
+  it("mode:next → invokes --switch --json (plain rotation)", async () => {
+    const { runner, calls } = makeFakeRunner({ prewarmOk: true });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    const handler = fc.routes.get("POST switch-primary")!;
+
+    await handler(makeSwitchReq({ mode: "next" }));
+
+    const switchCall = calls.find(
+      (c) => c.args[0] === "--switch" && !c.args.includes("--strategy"),
+    );
+    expect(switchCall?.args).toEqual(["--switch", "--json"]);
+  });
+
+  it("mode:best → invokes --switch --strategy best --json", async () => {
+    const { runner, calls } = makeFakeRunner({ prewarmOk: true });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    const handler = fc.routes.get("POST switch-primary")!;
+
+    await handler(makeSwitchReq({ mode: "best" }));
+
+    const switchCall = calls.find((c) => c.args[0] === "--switch" && c.args.includes("--strategy"));
+    expect(switchCall?.args).toEqual(["--switch", "--strategy", "best", "--json"]);
+  });
+
+  it("malformed body → 400 {ok:false}", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    const handler = fc.routes.get("POST switch-primary")!;
+
+    const res = await handler(
+      new Request("http://x/switch-primary", { method: "POST", body: "not json" }),
+    );
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { ok: boolean };
+    expect(body.ok).toBe(false);
+  });
+
+  it("missing body → 400 {ok:false}", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    const handler = fc.routes.get("POST switch-primary")!;
+
+    const res = await handler(new Request("http://x/switch-primary", { method: "POST" }));
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { ok: boolean };
+    expect(body.ok).toBe(false);
+  });
+
+  it("invalid mode value → 400 {ok:false}", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    const handler = fc.routes.get("POST switch-primary")!;
+
+    const res = await handler(makeSwitchReq({ mode: "invalid" }));
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { ok: boolean };
+    expect(body.ok).toBe(false);
+  });
+
+  it("missing mode → 400 {ok:false}", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    const handler = fc.routes.get("POST switch-primary")!;
+
+    const res = await handler(makeSwitchReq({}));
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { ok: boolean };
+    expect(body.ok).toBe(false);
+  });
+
+  it("mode:specific without account → 400 {ok:false}", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    const handler = fc.routes.get("POST switch-primary")!;
+
+    const res = await handler(makeSwitchReq({ mode: "specific" }));
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { ok: boolean };
+    expect(body.ok).toBe(false);
+  });
+
+  it("mode:specific with empty string account → 400 {ok:false}", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    const handler = fc.routes.get("POST switch-primary")!;
+
+    const res = await handler(makeSwitchReq({ mode: "specific", account: "" }));
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { ok: boolean };
+    expect(body.ok).toBe(false);
+  });
+
+  it("cswap failure → 500 {ok:false,error}; selection state unchanged", async () => {
+    const { runner, calls } = makeFakeRunner({ prewarmOk: true, switchError: true });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    const switchHandler = fc.routes.get("POST switch-primary")!;
+    const statsHandler = fc.routes.get("GET stats")!;
+
+    // create an assignment to verify it is not mutated by a failed switch
+    runHook(fc.getHook(), "s1");
+    const statsBefore = (await (await statsHandler(new Request("http://x/stats"))).json()) as {
+      cursor: number;
+      assignments: Record<string, number>;
+    };
+
+    const res = await switchHandler(makeSwitchReq({ mode: "next" }));
+
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { ok: boolean; error: string };
+    expect(body.ok).toBe(false);
+    expect(typeof body.error).toBe("string");
+
+    // selection state (cursor + assignments) must be unchanged
+    const statsAfter = (await (await statsHandler(new Request("http://x/stats"))).json()) as {
+      cursor: number;
+      assignments: Record<string, number>;
+    };
+    expect(statsAfter.cursor).toBe(statsBefore.cursor);
+    expect(statsAfter.assignments).toEqual(statsBefore.assignments);
+
+    // runner was invoked (proves the switch was attempted, not short-circuited)
+    expect(calls.some((c) => c.args[0] === "--switch")).toBe(true);
+  });
+
+  it("after switch success, switch guard is released (subsequent tick refreshes)", async () => {
+    const { runner, calls } = makeFakeRunner({ prewarmOk: true });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    const handler = fc.routes.get("POST switch-primary")!;
+
+    await handler(makeSwitchReq({ mode: "next" }));
+
+    const listBefore = calls.filter((c) => c.args[0] === "--list").length;
+    timers.handles[0]!.fn();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(calls.filter((c) => c.args[0] === "--list").length).toBeGreaterThan(listBefore);
+  });
+
+  it("after switch failure, switch guard is released (subsequent tick refreshes)", async () => {
+    const { runner, calls } = makeFakeRunner({ prewarmOk: true, switchError: true });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    const handler = fc.routes.get("POST switch-primary")!;
+
+    await handler(makeSwitchReq({ mode: "next" }));
+
+    const listBefore = calls.filter((c) => c.args[0] === "--list").length;
+    timers.handles[0]!.fn();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(calls.filter((c) => c.args[0] === "--list").length).toBeGreaterThan(listBefore);
+  });
+
+  it("tick gating: tick does not refresh while switch is in-flight; runs normally after", async () => {
+    let resolveSwitch!: () => void;
+    const switchBlockOn = new Promise<void>((resolve) => {
+      resolveSwitch = resolve;
+    });
+
+    const { runner, calls } = makeFakeRunner({ prewarmOk: true, switchBlockOn });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    const handler = fc.routes.get("POST switch-primary")!;
+
+    // Start switch without awaiting — runner is blocked on switchBlockOn (past beginSwitch)
+    const switchPromise = handler(makeSwitchReq({ mode: "next" }));
+
+    // Yield so the route executes through beginSwitch() + clearReady() up to the blocked runner
+    await new Promise((r) => setTimeout(r, 0));
+
+    const listBefore = calls.filter((c) => c.args[0] === "--list").length;
+
+    // Fire tick while switch is in-flight — isSwitching is true, so tick must early-return
+    timers.handles[0]!.fn();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(calls.filter((c) => c.args[0] === "--list").length).toBe(listBefore);
+
+    // Resolve the switch; route completes (calls refresh → one more --list internally)
+    resolveSwitch();
+    const res = await switchPromise;
+    expect(res.status).toBe(200);
+
+    // Guard is released — tick now runs normally
+    const listAfterSwitch = calls.filter((c) => c.args[0] === "--list").length;
+    timers.handles[0]!.fn();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(calls.filter((c) => c.args[0] === "--list").length).toBeGreaterThan(listAfterSwitch);
   });
 });

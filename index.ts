@@ -96,6 +96,7 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
 
   // ── Background: refresh the pool + warm usable-not-ready accounts on a fixed tick.
   const tick = async (): Promise<void> => {
+    if (prewarmer.isSwitching) return; // don't race an in-flight operator switch
     await prewarmer.refresh();
     prewarmer.warmStale();
     history.recordQuota(prewarmer.pool);
@@ -165,6 +166,64 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
     ctx.state.set("assignments", {});
     publish();
     return Response.json({ ok: true, cleared: true });
+  });
+  ctx.route("POST", "switch-primary", async (req): Promise<Response> => {
+    // Body-parse guard — malformed/missing body fails closed (distinct from the switch try/catch).
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return Response.json({ ok: false, error: "invalid JSON body" }, { status: 400 });
+    }
+    const b = (body ?? {}) as Record<string, unknown>;
+    const mode = b["mode"];
+    if (mode !== "specific" && mode !== "next" && mode !== "best") {
+      return Response.json(
+        { ok: false, error: 'invalid "mode": expected "specific" | "next" | "best"' },
+        { status: 400 },
+      );
+    }
+    let account: number | string | undefined;
+    if (mode === "specific") {
+      const acct = b["account"];
+      if (typeof acct !== "number" && !(typeof acct === "string" && acct.length > 0)) {
+        return Response.json(
+          { ok: false, error: 'mode "specific" requires "account" (number or non-empty string)' },
+          { status: 400 },
+        );
+      }
+      account = acct as number | string;
+    }
+
+    // Operator-triggered global switch — NEVER on the onSpawn hot path. The Prewarmer guard +
+    // ready clear/drop close the switch↔onSpawn race; the tick is gated above.
+    prewarmer.beginSwitch();
+    try {
+      // specific-by-number: drop only the target (other accounts stay assignable, no pool dip).
+      // string (email) target or next/best: full clear (target number unknown / unsafe to resolve).
+      if (mode === "specific" && typeof account === "number") {
+        prewarmer.dropReady(account);
+      } else {
+        prewarmer.clearReady();
+      }
+
+      const result =
+        mode === "specific"
+          ? await cswap.switchTo(account as number | string)
+          : mode === "best"
+            ? await cswap.switch("best")
+            : await cswap.switch(); // "next" → plain rotation
+
+      await prewarmer.refresh(); // re-classify (new active pruned by its active flag); publishes via onChange
+      return Response.json(result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      ctx.log.warn(`switch-primary failed: ${msg}`);
+      return Response.json({ ok: false, error: msg }, { status: 500 });
+    } finally {
+      prewarmer.endSwitch();
+      prewarmer.warmStale(); // rebuild ready on success AND failure; must run after endSwitch()
+    }
   });
 
   // Initial status snapshot.
