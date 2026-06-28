@@ -73,7 +73,7 @@ All fields are optional — the shipped `config.json` sets every default explici
 | `prewarmArgs`       | `string[]`                      | `["--version"]` | Args passed after `cswap run <N> --` to bootstrap a session profile. `--version` exits instantly with no quota usage.                                                                                                                                     |
 | `refreshIntervalMs` | `number`                        | `60000`         | Background `cswap --list` refresh + stale-profile re-warm interval (ms).                                                                                                                                                                                  |
 | `bootWarmTimeoutMs` | `number`                        | `30000`         | Max time (ms) the plugin waits for ≥1 account to become ready at boot before unblocking HTTP.                                                                                                                                                             |
-| `abortOnEmpty`      | `boolean`                       | `true`          | Refuse spawns (`ctx.abortSpawn`) when no usable account is available — Shepherd then holds and retries a refused create (no task loss) and hard-blocks a non-forced resume. Set `false` to fail-open (not recommended).                                    |
+| `abortOnEmpty`      | `boolean`                       | `true`          | Refuse spawns (`ctx.abortSpawn`) when no usable account is available — Shepherd then holds and retries a refused create (no task loss) and hard-blocks a non-forced resume. Set `false` to fail-open (not recommended).                                   |
 
 ---
 
@@ -103,7 +103,7 @@ ready accounts are re-warmed out of band.
 so a running agent's credentials are never rotated by a concurrent spawn.
 
 **Status panel:** Open Settings → Plugins in the Shepherd UI to see per-account 5h/7d quota,
-current session→account assignments, and the last spawn decision in real time.
+current session→account assignments, and the last spawn decision in real time. An account whose quota `cswap` cannot currently report shows a **quota unknown** badge instead of a misleading `0%` meter.
 
 **Graphical widgets:** the panel also renders per-account quota gauges and sparklines, a cross-account
 quota time-series, a session→account load bar-chart, and a spawn timeline (history is in-memory and
@@ -131,6 +131,7 @@ Returns the current pool state and session assignments as JSON:
       "email": "...",
       "usable": true,
       "rateLimited": false,
+      "usageUnavailable": false,
       "ready": true,
       "fiveHourPct": 5,
       "sevenDayPct": 12
@@ -260,6 +261,8 @@ diff /tmp/before.json /tmp/after.json
   as reported by `cswap --list --json`. If every non-active account is rate-limited, new
   creates are refused and held in Shepherd's hold queue, retried until one frees up (no task
   loss); a non-forced resume is hard-blocked.
+
+- **Accounts with unknown quota are deprioritized.** When `cswap --list --json` reports an account with `usageStatus: "ok"` but no usage figures (both 5h and 7d `pct` absent), its quota is unknown for that refresh. The panel shows a **quota unknown** badge instead of a misleading `0%` meter, and selection uses such an account only as a last resort — a new session is assigned a quota-unknown account only when no fully-known ready account exists. A resume stays pinned to its account regardless. The state clears automatically on the next refresh that reports usage. (Addresses [claude-swap#62](https://github.com/realiti4/claude-swap/issues/62).)
 
 - **No hot-reload.** Plugins load at boot only (Shepherd's design). Config changes require
   `systemctl --user restart shepherd`.
