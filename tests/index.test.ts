@@ -977,6 +977,27 @@ describe("register — POST switch-primary", () => {
     expect(calls.filter((c) => c.args[0] === "--list").length).toBeGreaterThan(listBefore);
   });
 
+  it("mode:specific account:<email> (string) → invokes --switch-to <email> --json and returns 200", async () => {
+    const { runner, calls } = makeFakeRunner({ prewarmOk: true });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    const handler = fc.routes.get("POST switch-primary")!;
+
+    const res = await handler(makeSwitchReq({ mode: "specific", account: "user@example.com" }));
+
+    expect(res.status).toBe(200);
+    // string target must go through clearReady() (not dropReady) and pass the email as-is
+    const switchCall = calls.find((c) => c.args[0] === "--switch-to");
+    expect(switchCall?.args).toEqual(["--switch-to", "user@example.com", "--json"]);
+  });
+
   it("mode:next → invokes --switch --json (plain rotation)", async () => {
     const { runner, calls } = makeFakeRunner({ prewarmOk: true });
     const timers = makeFakeTimers();

@@ -236,8 +236,9 @@ describe("Cswap.switch()", () => {
       timedOut: false,
     });
     const cswap = new Cswap("cswap", runner);
-    await cswap.switch();
+    const result = await cswap.switch();
     expect(calls[0]!.args).toEqual(["--switch", "--json"]);
+    expect(result.schemaVersion).toBe(1);
   });
 
   it("passes argv ['--switch','--strategy','best','--json'] for switch('best')", async () => {

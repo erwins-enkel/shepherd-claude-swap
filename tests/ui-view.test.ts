@@ -424,6 +424,13 @@ describe("buildUIView — primary account (active: true)", () => {
     expect(primaryBadge).toBeTruthy();
   });
 
+  it("primary badge has tone 'info' (visually distinct from neutral identity badge)", () => {
+    const v = buildUIView(cfg, primaryPool, new Set(), baseState, null, null);
+    const badges = findByType(v.root, "badge");
+    const primaryBadge = badges.find((b) => b.props?.["label"] === "primary");
+    expect(primaryBadge?.props?.["tone"]).toBe("info");
+  });
+
   it("active account does NOT show 'warming' badge even when usable-not-ready", () => {
     const v = buildUIView(cfg, primaryPool, new Set(), baseState, null, null);
     const badges = findByType(v.root, "badge");

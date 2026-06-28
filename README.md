@@ -180,8 +180,11 @@ Responses:
   [`docs/contracts/cswap-switch.sample.json`](docs/contracts/cswap-switch.sample.json)).
 - `400 { "ok": false, "error": … }` — malformed JSON body, or invalid/missing `mode`, or
   `specific` without `account`.
-- `500 { "ok": false, "error": … }` — the cswap switch (or follow-up pool refresh) failed;
-  selection state is left unchanged.
+- `500 { "ok": false, "error": … }` — the cswap switch failed; selection state is left unchanged.
+
+> **Fail-open note:** with `abortOnEmpty:false`, a `next`/`best` switch briefly clears the ready
+> pool, so new creates during that short window may fail open onto the default `~/.claude` login;
+> resumes still abort closed.
 
 ```sh
 curl -s -X POST -H "Authorization: Bearer $SHEPHERD_TOKEN" \

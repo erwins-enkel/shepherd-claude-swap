@@ -36,7 +36,7 @@ function quotaUnknownNote(active: boolean): PluginUINode {
 
 /** Status badge for one account: `active` wins first, then the remaining chain. */
 function buildStatusBadge(acct: PoolAccount, isReady: boolean): PluginUINode {
-  if (acct.active) return { type: "badge", props: { label: "primary", tone: "neutral" } };
+  if (acct.active) return { type: "badge", props: { label: "primary", tone: "info" } };
   if (acct.usageUnavailable)
     return { type: "badge", props: { label: "quota unknown", tone: "warn" } };
   if (isReady) return { type: "badge", props: { label: "ready", tone: "ok" } };
