@@ -79,7 +79,7 @@ isolation.
   `usageStatus`, `active`), filtered to OAuth accounts in the configured pool.
 - **Selection strategy:** sticky-per-session (sessionId → account, persisted in
   `ctx.state`) with round-robin assignment for new sessions; rate-limited accounts
-  (`usageStatus` reported by `cswap`) are skipped when assigning a new session.
+  (`usageStatus` reported by `cswap`) are skipped when assigning a new session. Accounts whose usage `cswap` reports as unavailable (`usageStatus: "ok"` but no 5h/7d `pct`) have unknown quota and are deprioritized — used for a new session only when no fully-known ready account exists (resume stays pinned).
 - **Per-spawn injection:** `onSpawn` returns `{ credentialDir: <session-profile-dir> }`
   pointing at the chosen account's `cswap` session profile
   (`<cswap-backup>/sessions/<num>-<email-slug>/`).
@@ -112,8 +112,8 @@ isolation.
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Integration target  | Wrap external `realiti4/claude-swap` (`cswap`) — not a self-contained switcher                                                                                                     |
 | Isolation mechanism | Per-spawn `credentialDir` = the account's `cswap` session-profile `CLAUDE_CONFIG_DIR` (no global `cswap --switch`, which would race parallel spawns and rotate live agents' creds) |
-| Selection           | Sticky-per-session; round-robin for new sessions; skip `cswap`-reported rate-limited accounts                                                                                      |
-| No usable account   | Refuse via `ctx.abortSpawn`; Shepherd holds + retries a refused create (no task loss), hard-blocks a non-forced resume                                                              |
+| Selection           | Sticky-per-session; round-robin for new sessions; skip `cswap`-reported rate-limited accounts; deprioritize unknown-quota accounts                                                 |
+| No usable account   | Refuse via `ctx.abortSpawn`; Shepherd holds + retries a refused create (no task loss), hard-blocks a non-forced resume                                                             |
 | Profile seam        | Self-contained: pre-warm profiles out-of-band via `cswap run`, inject the resolved path                                                                                            |
 | Scope               | Lean: select + inject + status panel + stats/reset routes                                                                                                                          |
 

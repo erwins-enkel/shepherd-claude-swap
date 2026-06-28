@@ -696,3 +696,138 @@ describe("register — history: quota and spawn recording", () => {
     expect(last.label).toMatch(/#\d+/);
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// Two-tier selection: usage-unavailable deprioritization (e2e)
+// ───────────────────────────────────────────────────────────────────────────
+
+const knownAndUnavailableList = {
+  schemaVersion: 1,
+  accounts: [
+    {
+      number: 1,
+      email: "acct1@example.com",
+      active: false,
+      usageStatus: "ok",
+      usage: { fiveHour: { pct: 10 }, sevenDay: { pct: 10 } },
+    },
+    {
+      number: 2,
+      email: "acct2@example.com",
+      active: false,
+      usageStatus: "ok",
+      usage: null, // usageUnavailable
+    },
+  ],
+};
+
+const onlyUnavailableList = {
+  schemaVersion: 1,
+  accounts: [
+    {
+      number: 1,
+      email: "acct1@example.com",
+      active: false,
+      usageStatus: "ok",
+      usage: null, // usageUnavailable
+    },
+  ],
+};
+
+describe("register — two-tier selection (usage-unavailable e2e)", () => {
+  it("known ready + unavailable ready → picks known account", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true, listResult: knownAndUnavailableList });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    runHook(fc.getHook(), "s1");
+    const assignments = JSON.parse(fc.store.get("assignments")!) as Record<string, number>;
+    expect(assignments["s1"]).toBe(1); // known account, not unavailable #2
+  });
+
+  it("only unavailable ready → assigned (last-resort, not abort)", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true, listResult: onlyUnavailableList });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx({ config: { abortOnEmpty: true } });
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    // fallback tier means assign() returns "assigned", so no abort even with abortOnEmpty
+    expect(() => runHook(fc.getHook(), "s1")).not.toThrow();
+    const assignments = JSON.parse(fc.store.get("assignments")!) as Record<string, number>;
+    expect(assignments["s1"]).toBe(1);
+  });
+
+  it("abortOnEmpty:false resume: pinned quota-unknown account stays pinned (not fail-open)", async () => {
+    // Boot with known-usage account so it gets prewarmed into ready.
+    const knownList = {
+      schemaVersion: 1,
+      accounts: [
+        {
+          number: 1,
+          email: "acct1@example.com",
+          active: false,
+          usageStatus: "ok",
+          usage: { fiveHour: { pct: 10 }, sevenDay: { pct: 10 } },
+        },
+      ],
+    };
+    // On subsequent list calls, account 1 reports usage:null (usageUnavailable).
+    const unavailableList = {
+      schemaVersion: 1,
+      accounts: [
+        {
+          number: 1,
+          email: "acct1@example.com",
+          active: false,
+          usageStatus: "ok",
+          usage: null,
+        },
+      ],
+    };
+    let listCallCount = 0;
+    const runner: Runner = async (_bin, args) => {
+      if (args[0] === "--list") {
+        listCallCount++;
+        const result = listCallCount === 1 ? knownList : unavailableList;
+        return { stdout: JSON.stringify(result), stderr: "", code: 0, timedOut: false };
+      }
+      // prewarm (run) always succeeds
+      return { stdout: "", stderr: "", code: 0, timedOut: false };
+    };
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx({ config: { abortOnEmpty: false } });
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+
+    // Spawn new session → pins s1 to account 1, captures credentialDir.
+    const first = runHook(fc.getHook(), "s1") as SpawnPatch;
+    expect(first.credentialDir).toBeTruthy();
+
+    // Tick: re-list returns usage:null → account 1 becomes usageUnavailable but stays usable
+    // and is NOT pruned from ready (prewarm.ts only prunes unusable/rateLimited/gone).
+    timers.handles[0]!.fn();
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Resume s1: pinned to account 1 which is now quota-unknown but still in ready.
+    // Must return the same credentialDir — never fail open to the default ~/.claude.
+    const resumed = runHook(fc.getHook(), "s1") as SpawnPatch;
+    expect(resumed.credentialDir).toBeTruthy();
+    expect(resumed.credentialDir).toBe(first.credentialDir);
+  });
+});

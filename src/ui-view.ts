@@ -40,7 +40,9 @@ export function buildUIView(
     for (const acct of detailed) {
       const isReady = ready.has(acct.number);
       let badge: PluginUINode;
-      if (isReady) {
+      if (acct.usageUnavailable) {
+        badge = { type: "badge", props: { label: "quota unknown", tone: "warn" } };
+      } else if (isReady) {
         badge = { type: "badge", props: { label: "ready", tone: "ok" } };
       } else if (acct.rateLimited) {
         badge = { type: "badge", props: { label: "rate-limited", tone: "error" } };
@@ -57,6 +59,36 @@ export function buildUIView(
       const fiveTone = fivePct >= cfg.rateLimitPct ? "error" : "ok";
       const sevenTone = sevenPct >= cfg.rateLimitPct ? "error" : "ok";
 
+      const meterOrUnknown: PluginUINode[] = acct.usageUnavailable
+        ? [
+            {
+              type: "text",
+              props: { content: "quota unknown — deprioritized; re-checked next refresh" },
+            },
+          ]
+        : [
+            {
+              type: "meter",
+              props: {
+                label: "5h",
+                value: fivePct,
+                max: 100,
+                caption: fiveCaption,
+                tone: fiveTone,
+              },
+            },
+            {
+              type: "meter",
+              props: {
+                label: "7d",
+                value: sevenPct,
+                max: 100,
+                caption: sevenCaption,
+                tone: sevenTone,
+              },
+            },
+          ];
+
       const acctStack: PluginUINode = {
         type: "stack",
         props: { direction: "vertical", gap: "sm" },
@@ -69,20 +101,7 @@ export function buildUIView(
               badge,
             ],
           },
-          {
-            type: "meter",
-            props: { label: "5h", value: fivePct, max: 100, caption: fiveCaption, tone: fiveTone },
-          },
-          {
-            type: "meter",
-            props: {
-              label: "7d",
-              value: sevenPct,
-              max: 100,
-              caption: sevenCaption,
-              tone: sevenTone,
-            },
-          },
+          ...meterOrUnknown,
         ],
       };
       nodes.push(acctStack);
@@ -151,52 +170,70 @@ export function buildUIView(
   nodes.push({ type: "text", props: { content: "Graphics", weight: "bold" } });
 
   for (const a of detailed) {
-    const fp = fivePctFor(a);
-    const sp = sevenPctFor(a);
-    nodes.push({
-      type: "stack",
-      props: { direction: "vertical" },
-      children: [
-        { type: "text", props: { content: `#${a.number} ${a.email}` } },
-        {
-          type: "gauge",
-          props: {
-            label: "5h",
-            value: fp,
-            max: 100,
-            tone: toneFor(fp),
-            caption: fiveCaptionFor(a),
+    if (a.usageUnavailable) {
+      nodes.push({
+        type: "stack",
+        props: { direction: "vertical" },
+        children: [
+          { type: "text", props: { content: `#${a.number} ${a.email}` } },
+          {
+            type: "text",
+            props: { content: "quota unknown — deprioritized; re-checked next refresh" },
           },
-        },
-        {
-          type: "gauge",
-          props: {
-            label: "7d",
-            value: sp,
-            max: 100,
-            tone: toneFor(sp),
-            caption: sevenCaptionFor(a),
+        ],
+      });
+    } else {
+      const fp = fivePctFor(a);
+      const sp = sevenPctFor(a);
+      nodes.push({
+        type: "stack",
+        props: { direction: "vertical" },
+        children: [
+          { type: "text", props: { content: `#${a.number} ${a.email}` } },
+          {
+            type: "gauge",
+            props: {
+              label: "5h",
+              value: fp,
+              max: 100,
+              tone: toneFor(fp),
+              caption: fiveCaptionFor(a),
+            },
           },
-        },
-        {
-          type: "sparkline",
-          props: { label: "5h trend", points: quotaPointsFor(a), tone: toneFor(fp) },
-        },
-      ],
-    });
+          {
+            type: "gauge",
+            props: {
+              label: "7d",
+              value: sp,
+              max: 100,
+              tone: toneFor(sp),
+              caption: sevenCaptionFor(a),
+            },
+          },
+          {
+            type: "sparkline",
+            props: { label: "5h trend", points: quotaPointsFor(a), tone: toneFor(fp) },
+          },
+        ],
+      });
+    }
   }
 
+  const seriesAccounts = detailed.filter((a) => !a.usageUnavailable);
+  const hiddenCount = detailed.length - seriesAccounts.length;
+  const timeSeriesCaption =
+    hiddenCount > 0 ? `5h % (${hiddenCount} hidden: quota unknown)` : "5h %";
   nodes.push({
     type: "time-series",
     props: {
-      series: detailed.map((a) => ({
+      series: seriesAccounts.map((a) => ({
         label: `#${a.number}`,
         tone: toneFor(fivePctFor(a)),
         points: quotaPointsFor(a),
       })),
       yMax: 100,
       kind: "line",
-      caption: "5h %",
+      caption: timeSeriesCaption,
     },
   });
 
