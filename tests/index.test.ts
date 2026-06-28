@@ -40,6 +40,7 @@ function makeFakeRunner(opts?: {
   const prewarmOk = opts?.prewarmOk ?? true;
   const listResult = opts?.listResult ?? fixtureRaw;
   const calls: RunnerCall[] = [];
+  // fallow-ignore-next-line complexity
   const runner: Runner = async (bin, args) => {
     calls.push({ bin, args: [...args] });
     if (args[0] === "--list") {

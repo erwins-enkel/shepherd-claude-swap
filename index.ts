@@ -167,6 +167,7 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
     publish();
     return Response.json({ ok: true, cleared: true });
   });
+  // fallow-ignore-next-line complexity
   ctx.route("POST", "switch-primary", async (req): Promise<Response> => {
     // Body-parse guard — malformed/missing body fails closed (distinct from the switch try/catch).
     let body: unknown;
