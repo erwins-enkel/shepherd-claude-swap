@@ -25,6 +25,144 @@ function quotaCaption(pct: number | null, clock: string | null, countdown: strin
   return `${pct}%${resetSuffix(clock, countdown)}`;
 }
 
+/** Text node explaining why quota is unknown. Wording differs for the active (primary) account
+ *  because it is excluded from rotation, not merely deprioritized. */
+function quotaUnknownNote(active: boolean): PluginUINode {
+  const content = active
+    ? "quota unknown — primary account (excluded from rotation)"
+    : "quota unknown — deprioritized; re-checked next refresh";
+  return { type: "text", props: { content } };
+}
+
+/** Status badge for one account: `active` wins first, then the remaining chain. */
+function buildStatusBadge(acct: PoolAccount, isReady: boolean): PluginUINode {
+  if (acct.active) return { type: "badge", props: { label: "primary", tone: "info" } };
+  if (acct.usageUnavailable)
+    return { type: "badge", props: { label: "quota unknown", tone: "warn" } };
+  if (isReady) return { type: "badge", props: { label: "ready", tone: "ok" } };
+  if (acct.rateLimited) return { type: "badge", props: { label: "rate-limited", tone: "error" } };
+  if (acct.usable) return { type: "badge", props: { label: "warming", tone: "warn" } };
+  return { type: "badge", props: { label: acct.reason ?? "unusable", tone: "neutral" } };
+}
+
+/** Meters (5h + 7d) for an account with known quota, or the quota-unknown note. */
+function buildAccountMeters(acct: PoolAccount, rateLimitPct: number): PluginUINode[] {
+  if (acct.usageUnavailable) return [quotaUnknownNote(acct.active)];
+  const fivePct = acct.fiveHourPct ?? 0;
+  const sevenPct = acct.sevenDayPct ?? 0;
+  const fiveCaption = quotaCaption(
+    acct.fiveHourPct,
+    acct.fiveHourResetClock,
+    acct.fiveHourResetCountdown,
+  );
+  const sevenCaption = quotaCaption(
+    acct.sevenDayPct,
+    acct.sevenDayResetClock,
+    acct.sevenDayResetCountdown,
+  );
+  return [
+    {
+      type: "meter",
+      props: {
+        label: `#${acct.number} · 5h`,
+        value: fivePct,
+        max: 100,
+        caption: fiveCaption,
+        tone: fivePct >= rateLimitPct ? "error" : "ok",
+      },
+    },
+    {
+      type: "meter",
+      props: {
+        label: `#${acct.number} · 7d`,
+        value: sevenPct,
+        max: 100,
+        caption: sevenCaption,
+        tone: sevenPct >= rateLimitPct ? "error" : "ok",
+      },
+    },
+  ];
+}
+
+/** Build the flat pool row for one account: identity + status badge + meters or unknown note. */
+function buildPoolAccountRow(
+  acct: PoolAccount,
+  isReady: boolean,
+  rateLimitPct: number,
+): PluginUINode {
+  return {
+    type: "stack",
+    props: { direction: "vertical", gap: "sm" },
+    children: [
+      {
+        type: "stack",
+        props: { direction: "horizontal" },
+        children: [identityBadge(acct.number, acct.email), buildStatusBadge(acct, isReady)],
+      },
+      ...buildAccountMeters(acct, rateLimitPct),
+    ],
+  };
+}
+
+/** Build the graphical section node for one account: gauges + sparkline, or unknown note. */
+function buildGraphicsAccountNode(
+  a: PoolAccount,
+  rateLimitPct: number,
+  history: History,
+): PluginUINode {
+  if (a.usageUnavailable) {
+    return {
+      type: "stack",
+      props: { direction: "vertical" },
+      children: [identityBadge(a.number, a.email), quotaUnknownNote(a.active)],
+    };
+  }
+  const fp = a.fiveHourPct ?? 0;
+  const sp = a.sevenDayPct ?? 0;
+  const toneFor = (pct: number) => (pct >= rateLimitPct ? "error" : "ok");
+  const fiveCaption = quotaCaption(a.fiveHourPct, a.fiveHourResetClock, a.fiveHourResetCountdown);
+  const sevenCaption = quotaCaption(a.sevenDayPct, a.sevenDayResetClock, a.sevenDayResetCountdown);
+  const points = downsample(
+    history.quotaFor(a.number).map((s) => s.five ?? 0),
+    CHART_WINDOW,
+  );
+  return {
+    type: "stack",
+    props: { direction: "vertical" },
+    children: [
+      identityBadge(a.number, a.email),
+      {
+        type: "gauge",
+        props: {
+          label: `#${a.number} · 5h`,
+          value: fp,
+          max: 100,
+          tone: toneFor(fp),
+          caption: fiveCaption,
+        },
+      },
+      {
+        type: "gauge",
+        props: {
+          label: `#${a.number} · 7d`,
+          value: sp,
+          max: 100,
+          tone: toneFor(sp),
+          caption: sevenCaption,
+        },
+      },
+      {
+        type: "sparkline",
+        props: {
+          label: `#${a.number} · 5h trend`,
+          points,
+          tone: toneFor(fp),
+        },
+      },
+    ],
+  };
+}
+
 /** Build a `settings-panel` PluginUIView with the same data as buildStatus. */
 export function buildUIView(
   cfg: ResolvedConfig,
@@ -58,78 +196,7 @@ export function buildUIView(
   } else {
     const detailed = pool.slice(0, MAX_DETAILED_ACCOUNTS);
     for (const acct of detailed) {
-      const isReady = ready.has(acct.number);
-      let badge: PluginUINode;
-      if (acct.usageUnavailable) {
-        badge = { type: "badge", props: { label: "quota unknown", tone: "warn" } };
-      } else if (isReady) {
-        badge = { type: "badge", props: { label: "ready", tone: "ok" } };
-      } else if (acct.rateLimited) {
-        badge = { type: "badge", props: { label: "rate-limited", tone: "error" } };
-      } else if (acct.usable) {
-        badge = { type: "badge", props: { label: "warming", tone: "warn" } };
-      } else {
-        badge = { type: "badge", props: { label: acct.reason ?? "unusable", tone: "neutral" } };
-      }
-
-      const fivePct = acct.fiveHourPct ?? 0;
-      const sevenPct = acct.sevenDayPct ?? 0;
-      const fiveCaption = quotaCaption(
-        acct.fiveHourPct,
-        acct.fiveHourResetClock,
-        acct.fiveHourResetCountdown,
-      );
-      const sevenCaption = quotaCaption(
-        acct.sevenDayPct,
-        acct.sevenDayResetClock,
-        acct.sevenDayResetCountdown,
-      );
-      const fiveTone = fivePct >= cfg.rateLimitPct ? "error" : "ok";
-      const sevenTone = sevenPct >= cfg.rateLimitPct ? "error" : "ok";
-
-      const meterOrUnknown: PluginUINode[] = acct.usageUnavailable
-        ? [
-            {
-              type: "text",
-              props: { content: "quota unknown — deprioritized; re-checked next refresh" },
-            },
-          ]
-        : [
-            {
-              type: "meter",
-              props: {
-                label: `#${acct.number} · 5h`,
-                value: fivePct,
-                max: 100,
-                caption: fiveCaption,
-                tone: fiveTone,
-              },
-            },
-            {
-              type: "meter",
-              props: {
-                label: `#${acct.number} · 7d`,
-                value: sevenPct,
-                max: 100,
-                caption: sevenCaption,
-                tone: sevenTone,
-              },
-            },
-          ];
-
-      const acctStack: PluginUINode = {
-        type: "stack",
-        props: { direction: "vertical", gap: "sm" },
-        children: [
-          {
-            type: "stack",
-            props: { direction: "horizontal" },
-            children: [identityBadge(acct.number, acct.email), badge],
-          },
-          ...meterOrUnknown,
-        ],
-      };
-      nodes.push(acctStack);
+      nodes.push(buildPoolAccountRow(acct, ready.has(acct.number), cfg.rateLimitPct));
     }
     if (pool.length > MAX_DETAILED_ACCOUNTS) {
       nodes.push({
@@ -180,74 +247,19 @@ export function buildUIView(
   // ── Graphical section ─────────────────────────────────────────────────────
   const detailed = pool.slice(0, MAX_DETAILED_ACCOUNTS);
 
+  nodes.push({ type: "text", props: { content: "Graphics", weight: "bold" } });
+
+  for (const a of detailed) {
+    nodes.push(buildGraphicsAccountNode(a, cfg.rateLimitPct, history));
+  }
+
   const fivePctFor = (a: PoolAccount) => a.fiveHourPct ?? 0;
-  const sevenPctFor = (a: PoolAccount) => a.sevenDayPct ?? 0;
-  const fiveCaptionFor = (a: PoolAccount) =>
-    quotaCaption(a.fiveHourPct, a.fiveHourResetClock, a.fiveHourResetCountdown);
-  const sevenCaptionFor = (a: PoolAccount) =>
-    quotaCaption(a.sevenDayPct, a.sevenDayResetClock, a.sevenDayResetCountdown);
   const toneFor = (pct: number) => (pct >= cfg.rateLimitPct ? "error" : "ok");
   const quotaPointsFor = (a: PoolAccount) =>
     downsample(
       history.quotaFor(a.number).map((s) => s.five ?? 0),
       CHART_WINDOW,
     );
-
-  nodes.push({ type: "text", props: { content: "Graphics", weight: "bold" } });
-
-  for (const a of detailed) {
-    if (a.usageUnavailable) {
-      nodes.push({
-        type: "stack",
-        props: { direction: "vertical" },
-        children: [
-          identityBadge(a.number, a.email),
-          {
-            type: "text",
-            props: { content: "quota unknown — deprioritized; re-checked next refresh" },
-          },
-        ],
-      });
-    } else {
-      const fp = fivePctFor(a);
-      const sp = sevenPctFor(a);
-      nodes.push({
-        type: "stack",
-        props: { direction: "vertical" },
-        children: [
-          identityBadge(a.number, a.email),
-          {
-            type: "gauge",
-            props: {
-              label: `#${a.number} · 5h`,
-              value: fp,
-              max: 100,
-              tone: toneFor(fp),
-              caption: fiveCaptionFor(a),
-            },
-          },
-          {
-            type: "gauge",
-            props: {
-              label: `#${a.number} · 7d`,
-              value: sp,
-              max: 100,
-              tone: toneFor(sp),
-              caption: sevenCaptionFor(a),
-            },
-          },
-          {
-            type: "sparkline",
-            props: {
-              label: `#${a.number} · 5h trend`,
-              points: quotaPointsFor(a),
-              tone: toneFor(fp),
-            },
-          },
-        ],
-      });
-    }
-  }
 
   const seriesAccounts = detailed.filter((a) => !a.usageUnavailable);
   const hiddenCount = detailed.length - seriesAccounts.length;

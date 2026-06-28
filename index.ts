@@ -10,7 +10,7 @@
 
 import type { PluginContext, SpawnPatch } from "./types";
 import { parseConfig } from "./src/config";
-import { Cswap, type Runner } from "./src/cswap";
+import { Cswap, type Runner, type CswapSwitchResult } from "./src/cswap";
 import { History } from "./src/history";
 import { cswapBackupRoot, sessionProfileDir } from "./src/paths";
 import { assign, type SelectionState } from "./src/selection";
@@ -39,6 +39,62 @@ const defaultSetInterval: NonNullable<PluginDeps["setInterval"]> = (fn, ms) => {
   (handle as { unref?: () => void }).unref?.();
   return handle;
 };
+
+type SwitchPrimaryParsed =
+  | { ok: false; response: Response }
+  | { ok: true; mode: "specific" | "next" | "best"; account: number | string | undefined };
+
+/** Parse + validate the POST switch-primary body. Returns ok:false with a ready 4xx Response on error. */
+function parseSwitchPrimaryBody(body: unknown): SwitchPrimaryParsed {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const mode = b["mode"];
+  if (mode !== "specific" && mode !== "next" && mode !== "best") {
+    return {
+      ok: false,
+      response: Response.json(
+        { ok: false, error: 'invalid "mode": expected "specific" | "next" | "best"' },
+        { status: 400 },
+      ),
+    };
+  }
+  if (mode === "specific") {
+    const acct = b["account"];
+    if (typeof acct !== "number" && !(typeof acct === "string" && acct.length > 0)) {
+      return {
+        ok: false,
+        response: Response.json(
+          { ok: false, error: 'mode "specific" requires "account" (number or non-empty string)' },
+          { status: 400 },
+        ),
+      };
+    }
+    return { ok: true, mode, account: acct as number | string };
+  }
+  return { ok: true, mode, account: undefined };
+}
+
+/**
+ * Prep `ready` then invoke the cswap switch for the given mode. The `ready` mutation is
+ * synchronous and runs BEFORE the cswap call (the caller invokes this immediately after
+ * `beginSwitch()`, with no `await` between), so the switch↔onSpawn race stays closed:
+ * specific-by-number drops only the target (other accounts stay assignable); a string/email
+ * target or next/best clears the whole set (target number unknown / unsafe to resolve).
+ */
+function executeSwitch(
+  prewarmer: Prewarmer,
+  cswap: Cswap,
+  mode: "specific" | "next" | "best",
+  account: number | string | undefined,
+): Promise<CswapSwitchResult> {
+  if (mode === "specific" && typeof account === "number") {
+    prewarmer.dropReady(account);
+  } else {
+    prewarmer.clearReady();
+  }
+  if (mode === "specific") return cswap.switchTo(account as number | string);
+  if (mode === "best") return cswap.switch("best");
+  return cswap.switch(); // "next" → plain rotation
+}
 
 /**
  * Plugin entry. Returns a teardown that clears the background interval and best-effort
@@ -96,6 +152,7 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
 
   // ── Background: refresh the pool + warm usable-not-ready accounts on a fixed tick.
   const tick = async (): Promise<void> => {
+    if (prewarmer.isSwitching) return; // don't race an in-flight operator switch
     await prewarmer.refresh();
     prewarmer.warmStale();
     history.recordQuota(prewarmer.pool);
@@ -165,6 +222,46 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
     ctx.state.set("assignments", {});
     publish();
     return Response.json({ ok: true, cleared: true });
+  });
+  ctx.route("POST", "switch-primary", async (req): Promise<Response> => {
+    // Body-parse guard — malformed/missing body fails closed (distinct from the switch try/catch).
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return Response.json({ ok: false, error: "invalid JSON body" }, { status: 400 });
+    }
+    const parsed = parseSwitchPrimaryBody(body);
+    if (!parsed.ok) return parsed.response;
+    const { mode, account } = parsed;
+
+    // Reject concurrent switches. beginSwitch/endSwitch is a non-reentrant boolean, so a second
+    // in-flight switch would let the first's `finally` clear `switching` while the second's cswap
+    // subprocess is still running — re-enabling the tick/warmStale mid-switch and reopening the
+    // race. The single event loop + no `await` between this check and beginSwitch() below makes the
+    // claim atomic, so only one switch can hold the guard at a time.
+    if (prewarmer.isSwitching) {
+      return Response.json(
+        { ok: false, error: "a primary switch is already in progress" },
+        { status: 409 },
+      );
+    }
+
+    // Operator-triggered global switch — NEVER on the onSpawn hot path. The Prewarmer guard +
+    // ready clear/drop (in executeSwitch) close the switch↔onSpawn race; the tick is gated above.
+    prewarmer.beginSwitch();
+    try {
+      const result = await executeSwitch(prewarmer, cswap, mode, account);
+      await prewarmer.refresh(); // re-classify (new active pruned by its active flag); publishes via onChange
+      return Response.json(result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      ctx.log.warn(`switch-primary failed: ${msg}`);
+      return Response.json({ ok: false, error: msg }, { status: 500 });
+    } finally {
+      prewarmer.endSwitch();
+      prewarmer.warmStale(); // rebuild ready on success AND failure; must run after endSwitch()
+    }
   });
 
   // Initial status snapshot.

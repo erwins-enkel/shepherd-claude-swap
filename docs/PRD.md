@@ -108,14 +108,14 @@ isolation.
 
 ## 7. Key design decisions (resolved)
 
-| Decision            | Choice                                                                                                                                                                             |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Integration target  | Wrap external `realiti4/claude-swap` (`cswap`) — not a self-contained switcher                                                                                                     |
-| Isolation mechanism | Per-spawn `credentialDir` = the account's `cswap` session-profile `CLAUDE_CONFIG_DIR` (no global `cswap --switch`, which would race parallel spawns and rotate live agents' creds) |
-| Selection           | Sticky-per-session; round-robin for new sessions; skip `cswap`-reported rate-limited accounts; deprioritize unknown-quota accounts                                                 |
-| No usable account   | Refuse via `ctx.abortSpawn`; Shepherd holds + retries a refused create (no task loss), hard-blocks a non-forced resume                                                             |
-| Profile seam        | Self-contained: pre-warm profiles out-of-band via `cswap run`, inject the resolved path                                                                                            |
-| Scope               | Lean: select + inject + status panel + stats/reset routes                                                                                                                          |
+| Decision            | Choice                                                                                                                                                                                                                                                                                                                       |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Integration target  | Wrap external `realiti4/claude-swap` (`cswap`) — not a self-contained switcher                                                                                                                                                                                                                                               |
+| Isolation mechanism | Per-spawn `credentialDir` = the account's `cswap` session-profile `CLAUDE_CONFIG_DIR` (no global `cswap --switch` **on the hot path**, which would race parallel spawns and rotate live agents' creds; operator-triggered global switch is available out of band via `POST switch-primary`, which also rewrites `~/.claude`) |
+| Selection           | Sticky-per-session; round-robin for new sessions; skip `cswap`-reported rate-limited accounts; deprioritize unknown-quota accounts                                                                                                                                                                                           |
+| No usable account   | Refuse via `ctx.abortSpawn`; Shepherd holds + retries a refused create (no task loss), hard-blocks a non-forced resume                                                                                                                                                                                                       |
+| Profile seam        | Self-contained: pre-warm profiles out-of-band via `cswap run`, inject the resolved path                                                                                                                                                                                                                                      |
+| Scope               | Lean: select + inject + status panel + stats/reset/switch-primary routes                                                                                                                                                                                                                                                     |
 
 ## 8. Assumptions
 
@@ -159,8 +159,9 @@ isolation.
 3. With every pool account rate-limited (or no profile ready), a create is refused and
    parked in Shepherd's hold queue, then retried until an account frees (no worktree loss);
    a non-forced resume returns "can't resume" — neither spawns under the default login.
-4. No global `cswap --switch` is performed; a running agent's credentials are never
-   rotated by another spawn.
+4. No global `cswap --switch` is performed **on the hot path** (`onSpawn`); a running
+   agent's credentials are never rotated by another spawn. (An operator-triggered global
+   switch via `POST switch-primary` is in scope and runs out of band.)
 5. The Settings → Plugins panel shows live per-account quota and session→account
    assignments; `GET stats` returns them and `POST reset` clears the sticky map.
 6. A missing/empty plugin install, or absent `cswap`, degrades cleanly — the plugin reports
