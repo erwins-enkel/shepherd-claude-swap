@@ -55,9 +55,9 @@ const cfg = parseConfig({});
 const cfgWith80Pct = parseConfig({ rateLimitPct: 80 });
 
 const pool: PoolAccount[] = [
-  makeAccount(1, { fiveHourPct: 40, sevenDayPct: 50 }), // ready, usable
-  makeAccount(2, { rateLimited: true, fiveHourPct: 95, sevenDayPct: 99 }), // rate-limited
-  makeAccount(3, { fiveHourPct: 30, sevenDayPct: 40 }), // usable, warming (not in ready)
+  makeAccount(1, { active: false, fiveHourPct: 40, sevenDayPct: 50 }), // ready, usable
+  makeAccount(2, { active: false, rateLimited: true, fiveHourPct: 95, sevenDayPct: 99 }), // rate-limited
+  makeAccount(3, { active: false, fiveHourPct: 30, sevenDayPct: 40 }), // usable, warming (not in ready)
 ];
 const ready = new Set([1]);
 const baseState: SelectionState = {
@@ -147,7 +147,7 @@ describe("buildUIView — badge tones", () => {
   });
 
   it("unusable account gets tone neutral", () => {
-    const unusablePool = [makeAccount(4, { usable: false, reason: "api_key" })];
+    const unusablePool = [makeAccount(4, { active: false, usable: false, reason: "api_key" })];
     const v = buildUIView(cfg, unusablePool, new Set(), baseState, null, null);
     const badges = findByType(v.root, "badge");
     // Identity badges are also neutral, so locate the status badge by its label.
@@ -157,7 +157,7 @@ describe("buildUIView — badge tones", () => {
   });
 
   it("unusable account with null reason falls back to 'unusable'", () => {
-    const unusablePool = [makeAccount(5, { usable: false, reason: null })];
+    const unusablePool = [makeAccount(5, { active: false, usable: false, reason: null })];
     const v = buildUIView(cfg, unusablePool, new Set(), baseState, null, null);
     const badges = findByType(v.root, "badge");
     // Identity badges are also neutral, so locate the status badge by its label.
@@ -340,7 +340,12 @@ describe("buildUIView — empty pool", () => {
 
 describe("buildUIView — quota-unknown account", () => {
   const unknownPool = [
-    makeAccount(10, { usageUnavailable: true, fiveHourPct: null, sevenDayPct: null }),
+    makeAccount(10, {
+      active: false,
+      usageUnavailable: true,
+      fiveHourPct: null,
+      sevenDayPct: null,
+    }),
   ];
 
   it("badge label is 'quota unknown'", () => {
@@ -402,6 +407,88 @@ describe("buildUIView — quota-unknown account", () => {
     const ts = findByType(v.root, "time-series");
     const caption = ts[0]?.props?.["caption"] as string;
     expect(caption).toContain("hidden: quota unknown");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Primary badge (active account)
+// ---------------------------------------------------------------------------
+
+describe("buildUIView — primary account (active: true)", () => {
+  const primaryPool = [makeAccount(11, { active: true, fiveHourPct: 40, sevenDayPct: 50 })];
+
+  it("active account status badge has label 'primary'", () => {
+    const v = buildUIView(cfg, primaryPool, new Set(), baseState, null, null);
+    const badges = findByType(v.root, "badge");
+    const primaryBadge = badges.find((b) => b.props?.["label"] === "primary");
+    expect(primaryBadge).toBeTruthy();
+  });
+
+  it("active account does NOT show 'warming' badge even when usable-not-ready", () => {
+    const v = buildUIView(cfg, primaryPool, new Set(), baseState, null, null);
+    const badges = findByType(v.root, "badge");
+    const warmingBadge = badges.find((b) => b.props?.["label"] === "warming");
+    expect(warmingBadge).toBeUndefined();
+  });
+
+  it("active account with pct (not usageUnavailable) still emits meter nodes", () => {
+    const v = buildUIView(cfg, primaryPool, new Set([11]), baseState, null, null);
+    const meters = findByType(v.root, "meter");
+    expect(meters.length).toBeGreaterThan(0);
+  });
+
+  it("active + usageUnavailable quota-unknown note says 'primary account (excluded from rotation)'", () => {
+    const activeUnknownPool = [
+      makeAccount(12, {
+        active: true,
+        usageUnavailable: true,
+        fiveHourPct: null,
+        sevenDayPct: null,
+      }),
+    ];
+    const v = buildUIView(cfg, activeUnknownPool, new Set(), baseState, null, null);
+    const texts = findByType(v.root, "text");
+    const found = texts.find(
+      (t) => t.props?.["content"] === "quota unknown — primary account (excluded from rotation)",
+    );
+    expect(found).toBeTruthy();
+  });
+
+  it("active + usageUnavailable note does NOT say 'deprioritized'", () => {
+    const activeUnknownPool = [
+      makeAccount(12, {
+        active: true,
+        usageUnavailable: true,
+        fiveHourPct: null,
+        sevenDayPct: null,
+      }),
+    ];
+    const v = buildUIView(cfg, activeUnknownPool, new Set(), baseState, null, null);
+    const texts = findByType(v.root, "text");
+    const deprioritizedText = texts.find(
+      (t) =>
+        typeof t.props?.["content"] === "string" &&
+        (t.props["content"] as string).includes("deprioritized"),
+    );
+    expect(deprioritizedText).toBeUndefined();
+  });
+
+  it("regression: non-active ready account still shows 'ready' badge", () => {
+    const nonActivePool = [makeAccount(13, { active: false, fiveHourPct: 40, sevenDayPct: 50 })];
+    const v = buildUIView(cfg, nonActivePool, new Set([13]), baseState, null, null);
+    const badges = findByType(v.root, "badge");
+    const readyBadge = badges.find((b) => b.props?.["label"] === "ready");
+    expect(readyBadge).toBeTruthy();
+    expect(readyBadge?.props?.["tone"]).toBe("ok");
+  });
+
+  it("regression: non-active usable-not-ready account still shows 'warming' badge", () => {
+    const nonActivePool = [makeAccount(14, { active: false, fiveHourPct: 40, sevenDayPct: 50 })];
+    const v = buildUIView(cfg, nonActivePool, new Set(), baseState, null, null);
+    const badges = findByType(v.root, "badge");
+    const warmingBadge = badges.find((b) => b.props?.["label"] === "warming");
+    expect(warmingBadge).toBeTruthy();
+    expect(warmingBadge?.props?.["tone"]).toBe("warn");
   });
 });
 
