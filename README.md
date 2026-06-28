@@ -269,6 +269,14 @@ diff /tmp/before.json /tmp/after.json
 
 - **Accounts with unknown quota are deprioritized.** When `cswap --list --json` reports an account with `usageStatus: "ok"` but no usage figures (both 5h and 7d `pct` absent), its quota is unknown for that refresh. The panel shows a **quota unknown** badge instead of a misleading `0%` meter, and selection uses such an account only as a last resort — a new session is assigned a quota-unknown account only when no fully-known ready account exists. A resume stays pinned to its account regardless. The state clears automatically on the next refresh that reports usage. (Addresses [claude-swap#62](https://github.com/realiti4/claude-swap/issues/62).)
 
+- **Auto-processes (review / plan-gate / doc) bypass the rotation — they use the active
+  account.** The plugin can only steer spawns Shepherd routes through the `onSpawn` hook —
+  i.e. normal session create/drain and resume. Shepherd's reviewer-style auto-processes
+  (code review, plan-gate, doc-agent) spawn their agent directly and skip that hook, so they
+  inherit `cswap`'s active account instead of a pool-assigned one. This is a Shepherd **core**
+  gap, not something the plugin can patch from its side; tracked upstream at
+  [erwins-enkel/shepherd#1205](https://github.com/erwins-enkel/shepherd/issues/1205).
+
 - **No hot-reload.** Plugins load at boot only (Shepherd's design). Config changes require
   `systemctl --user restart shepherd`.
 
