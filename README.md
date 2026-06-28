@@ -105,6 +105,13 @@ so a running agent's credentials are never rotated by a concurrent spawn.
 **Status panel:** Open Settings → Plugins in the Shepherd UI to see per-account 5h/7d quota,
 current session→account assignments, and the last spawn decision in real time.
 
+**Graphical widgets:** the panel also renders per-account quota gauges and sparklines, a cross-account
+quota time-series, a session→account load bar-chart, and a spawn timeline (history is in-memory and
+resets on plugin restart). These use declarative node types rendered by the Shepherd host
+(see [`docs/contracts/plugin-ui-widgets.md`](docs/contracts/plugin-ui-widgets.md); host support landed
+in shepherd #1189). Chart spans cover up to `288 × refreshIntervalMs` of history (≈4.8 h at the default
+60 s interval) — distinct from the `5h`/`7d` quota-window labels.
+
 ---
 
 ## HTTP routes

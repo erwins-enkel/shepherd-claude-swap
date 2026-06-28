@@ -5,6 +5,7 @@ import type { PoolAccount } from "../src/accounts";
 import type { SelectionState } from "../src/selection";
 import type { LastSpawn } from "../src/status";
 import { parseConfig } from "../src/config";
+import { History, CHART_WINDOW, MAX_DETAILED_ACCOUNTS } from "../src/history";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -304,5 +305,277 @@ describe("buildUIView — JSON cleanliness", () => {
     const v = buildUIView(cfg, pool, ready, baseState, lastSpawn, null);
     const rt = JSON.parse(JSON.stringify(v)) as typeof v;
     expect(rt).toEqual(v);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tree-budget helpers
+// ---------------------------------------------------------------------------
+
+function collectAllArrayLengths(val: unknown): number[] {
+  if (Array.isArray(val)) {
+    return [val.length, ...val.flatMap(collectAllArrayLengths)];
+  }
+  if (typeof val === "object" && val !== null) {
+    return Object.values(val as Record<string, unknown>).flatMap(collectAllArrayLengths);
+  }
+  return [];
+}
+
+function treeStats(node: PluginUINode): { nodeCount: number; maxArrayLen: number; depth: number } {
+  const arrayLens: number[] = [];
+  if (node.props) {
+    for (const val of Object.values(node.props)) {
+      arrayLens.push(...collectAllArrayLengths(val));
+    }
+  }
+  const children = node.children ?? [];
+  arrayLens.push(children.length);
+
+  let nodeCount = 1;
+  let depth = 1;
+  for (const child of children) {
+    const cs = treeStats(child);
+    nodeCount += cs.nodeCount;
+    arrayLens.push(cs.maxArrayLen);
+    depth = Math.max(depth, 1 + cs.depth);
+  }
+  return { nodeCount, maxArrayLen: Math.max(0, ...arrayLens), depth };
+}
+
+// ---------------------------------------------------------------------------
+// Graphical widgets — new node types present
+// ---------------------------------------------------------------------------
+
+describe("buildUIView — new graphical node types", () => {
+  it("contains gauge, sparkline, time-series, bar-chart, timeline", () => {
+    const h = new History();
+    h.recordQuota(pool);
+    h.recordSpawn({ sessionId: "session-abc", accountNumber: 1, at: "2024-01-01T00:00:00.000Z" });
+    const v = buildUIView(cfg, pool, ready, baseState, lastSpawn, null, h);
+    const types = collectTypes(v.root);
+    expect(types).toContain("gauge");
+    expect(types).toContain("sparkline");
+    expect(types).toContain("time-series");
+    expect(types).toContain("bar-chart");
+    expect(types).toContain("timeline");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Graphical widgets — retained flat node types
+// ---------------------------------------------------------------------------
+
+describe("buildUIView — flat node types still present alongside graphical", () => {
+  it("contains stack, text, badge, meter, table, key-value, callout", () => {
+    const h = new History();
+    h.recordQuota(pool);
+    const v = buildUIView(cfg, pool, ready, baseState, lastSpawn, "oops", h);
+    const types = collectTypes(v.root);
+    expect(types).toContain("stack");
+    expect(types).toContain("text");
+    expect(types).toContain("badge");
+    expect(types).toContain("meter");
+    expect(types).toContain("table");
+    expect(types).toContain("key-value");
+    expect(types).toContain("callout");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Graphical widgets — prop shapes
+// ---------------------------------------------------------------------------
+
+describe("buildUIView — graphical prop shapes", () => {
+  it("gauge has numeric value and max===100", () => {
+    const v = buildUIView(cfg, pool, ready, baseState, lastSpawn, null);
+    const gauges = findByType(v.root, "gauge");
+    expect(gauges.length).toBeGreaterThan(0);
+    for (const g of gauges) {
+      expect(typeof g.props?.["value"]).toBe("number");
+      expect(g.props?.["max"]).toBe(100);
+    }
+  });
+
+  it("sparkline points is an array", () => {
+    const v = buildUIView(cfg, pool, ready, baseState, lastSpawn, null);
+    const sparklines = findByType(v.root, "sparkline");
+    expect(sparklines.length).toBeGreaterThan(0);
+    expect(Array.isArray(sparklines[0]?.props?.["points"])).toBe(true);
+  });
+
+  it("time-series series is a non-empty array with label/tone/points", () => {
+    const v = buildUIView(cfg, pool, ready, baseState, lastSpawn, null);
+    const ts = findByType(v.root, "time-series");
+    expect(ts.length).toBeGreaterThan(0);
+    const series = ts[0]?.props?.["series"] as Array<{
+      label: string;
+      tone: string;
+      points: number[];
+    }>;
+    expect(Array.isArray(series)).toBe(true);
+    expect(series.length).toBeGreaterThan(0);
+    for (const s of series) {
+      expect(typeof s.label).toBe("string");
+      expect(typeof s.tone).toBe("string");
+      expect(Array.isArray(s.points)).toBe(true);
+    }
+  });
+
+  it("bar-chart bars entries have label/value/tone", () => {
+    const v = buildUIView(cfg, pool, ready, baseState, lastSpawn, null);
+    const charts = findByType(v.root, "bar-chart");
+    expect(charts.length).toBeGreaterThan(0);
+    const bars = charts[0]?.props?.["bars"] as Array<{
+      label: string;
+      value: number;
+      tone: string;
+    }>;
+    expect(Array.isArray(bars)).toBe(true);
+    for (const b of bars) {
+      expect(typeof b.label).toBe("string");
+      expect(typeof b.value).toBe("number");
+      expect(typeof b.tone).toBe("string");
+    }
+  });
+
+  it("timeline events entry at equals spawn timestamp and label contains #account", () => {
+    const h = new History();
+    const spawnAt = "2024-06-01T12:00:00.000Z";
+    h.recordSpawn({ sessionId: "s1", accountNumber: 7, at: spawnAt });
+    const singlePool = [makeAccount(7)];
+    const v = buildUIView(
+      cfg,
+      singlePool,
+      new Set([7]),
+      { cursor: 0, assignments: {} },
+      null,
+      null,
+      h,
+    );
+    const timelines = findByType(v.root, "timeline");
+    expect(timelines.length).toBeGreaterThan(0);
+    const events = timelines[0]?.props?.["events"] as Array<{ at: string; label: string }>;
+    expect(events.length).toBe(1);
+    expect(events[0]?.at).toBe(spawnAt);
+    expect(events[0]?.label).toContain("#7");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Graphical widgets — bar-chart load counts
+// ---------------------------------------------------------------------------
+
+describe("buildUIView — bar-chart load counts", () => {
+  it("bar for #1 has value 2, #2 has value 1 with assignments {a:1, b:1, c:2}", () => {
+    const twoPool = [makeAccount(1), makeAccount(2)];
+    const assignState: SelectionState = { cursor: 0, assignments: { a: 1, b: 1, c: 2 } };
+    const v = buildUIView(cfg, twoPool, new Set([1, 2]), assignState, null, null);
+    const charts = findByType(v.root, "bar-chart");
+    const bars = charts[0]?.props?.["bars"] as Array<{
+      label: string;
+      value: number;
+      tone: string;
+    }>;
+    const bar1 = bars.find((b) => b.label === "#1");
+    const bar2 = bars.find((b) => b.label === "#2");
+    expect(bar1?.value).toBe(2);
+    expect(bar2?.value).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Graphical widgets — overflow cap
+// ---------------------------------------------------------------------------
+
+describe("buildUIView — overflow cap at MAX_DETAILED_ACCOUNTS", () => {
+  it("20-account pool: 16 badges, 16 sparklines, and exactly one '+4 more accounts' text", () => {
+    const bigPool = Array.from({ length: 20 }, (_, i) => makeAccount(i + 1));
+    const v = buildUIView(cfg, bigPool, new Set(), { cursor: 0, assignments: {} }, null, null);
+    const badges = findByType(v.root, "badge");
+    expect(badges.length).toBe(16);
+    const sparklines = findByType(v.root, "sparkline");
+    expect(sparklines.length).toBe(16);
+    const texts = findByType(v.root, "text");
+    const overflowTexts = texts.filter((t) => t.props?.["content"] === "+4 more accounts");
+    expect(overflowTexts.length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Graphical widgets — downsample applied
+// ---------------------------------------------------------------------------
+
+describe("buildUIView — downsample applied to sparkline points", () => {
+  it("recording >CHART_WINDOW samples yields sparkline.points.length <= CHART_WINDOW, last value matches last sample", () => {
+    const h = new History();
+    const singlePool = [makeAccount(1)];
+    // Record 100 samples, last five=77
+    for (let i = 0; i < 99; i++) {
+      h.recordQuota([makeAccount(1, { fiveHourPct: i % 50, sevenDayPct: 0 })]);
+    }
+    h.recordQuota([makeAccount(1, { fiveHourPct: 77, sevenDayPct: 0 })]);
+    const v = buildUIView(
+      cfg,
+      singlePool,
+      new Set([1]),
+      { cursor: 0, assignments: {} },
+      null,
+      null,
+      h,
+    );
+    const sparklines = findByType(v.root, "sparkline");
+    const pts = sparklines[0]?.props?.["points"] as number[];
+    expect(pts.length).toBeLessThanOrEqual(CHART_WINDOW);
+    expect(pts[pts.length - 1]).toBe(77);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Graphical widgets — FULL-ring joint budget
+// ---------------------------------------------------------------------------
+
+describe("buildUIView — FULL-ring joint budget", () => {
+  it("40-account pool, full rings: total nodes <=256, maxArrayLen <=500, depth <=16, JSON <=64KiB", () => {
+    const bigPool = Array.from({ length: 40 }, (_, i) =>
+      makeAccount(i + 1, { fiveHourPct: 50, sevenDayPct: 60 }),
+    );
+    const h = new History();
+    // Record 288 quota samples for each of the first MAX_DETAILED_ACCOUNTS accounts
+    for (let s = 0; s < 288; s++) {
+      h.recordQuota(
+        bigPool.slice(0, MAX_DETAILED_ACCOUNTS).map((a) => ({ ...a, fiveHourPct: s % 100 })),
+      );
+    }
+    // Record 50 spawns
+    for (let s = 0; s < 50; s++) {
+      h.recordSpawn({
+        sessionId: `sess-${s}`,
+        accountNumber: (s % MAX_DETAILED_ACCOUNTS) + 1,
+        at: new Date(s * 1000).toISOString(),
+      });
+    }
+    const v = buildUIView(cfg, bigPool, new Set(), { cursor: 0, assignments: {} }, null, null, h);
+    const stats = treeStats(v.root);
+    expect(stats.nodeCount).toBeLessThanOrEqual(256);
+    expect(stats.maxArrayLen).toBeLessThanOrEqual(500);
+    expect(stats.depth).toBeLessThanOrEqual(16);
+    expect(Buffer.byteLength(JSON.stringify(v), "utf8")).toBeLessThanOrEqual(64 * 1024);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Graphical widgets — empty-history behavior
+// ---------------------------------------------------------------------------
+
+describe("buildUIView — empty history", () => {
+  it("fresh History: timeline present with events.length===0, time-series present, bar-chart present", () => {
+    const v = buildUIView(cfg, pool, ready, baseState, lastSpawn, null, new History());
+    const timelines = findByType(v.root, "timeline");
+    expect(timelines.length).toBeGreaterThan(0);
+    const events = timelines[0]?.props?.["events"] as unknown[];
+    expect(events.length).toBe(0);
+    expect(findByType(v.root, "time-series").length).toBeGreaterThan(0);
+    expect(findByType(v.root, "bar-chart").length).toBeGreaterThan(0);
   });
 });

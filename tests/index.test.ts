@@ -3,6 +3,7 @@ import { register, type PluginDeps } from "../index";
 import { PluginSpawnAborted } from "../types";
 import type {
   PluginContext,
+  PluginUINode,
   PluginState,
   SpawnDescriptor,
   SpawnHook,
@@ -75,6 +76,7 @@ interface FakeCtx {
   getHook(): SpawnHook | undefined;
   routes: Map<string, PluginRouteHandler>;
   statuses: unknown[];
+  uiViews: unknown[];
   logs: unknown[][];
   abortReasons: string[];
 }
@@ -103,6 +105,7 @@ function makeFakeCtx(opts?: {
   let spawnHook: SpawnHook | undefined;
   const routes = new Map<string, PluginRouteHandler>();
   const statuses: unknown[] = [];
+  const uiViews: unknown[] = [];
   const logs: unknown[][] = [];
   const abortReasons: string[] = [];
 
@@ -121,6 +124,9 @@ function makeFakeCtx(opts?: {
     publishStatus(status: unknown) {
       statuses.push(status);
     },
+    publishUI(view: unknown) {
+      uiViews.push(view);
+    },
     state,
     route(method: string, path: string, handler: PluginRouteHandler) {
       routes.set(`${method} ${path}`, handler);
@@ -136,7 +142,7 @@ function makeFakeCtx(opts?: {
     },
   };
 
-  return { ctx, store, getHook: () => spawnHook, routes, statuses, logs, abortReasons };
+  return { ctx, store, getHook: () => spawnHook, routes, statuses, uiViews, logs, abortReasons };
 }
 
 function makeDescriptor(sessionId: string): SpawnDescriptor {
@@ -156,6 +162,36 @@ const now = () => "2026-06-27T12:00:00.000Z";
 function runHook(hook: SpawnHook | undefined, sessionId: string): SpawnPatch | void {
   if (!hook) throw new Error("onSpawn hook not registered");
   return hook(makeDescriptor(sessionId)) as SpawnPatch | void;
+}
+
+/** Walk the tree and return all nodes with matching type. */
+function findByType(node: PluginUINode, type: string): PluginUINode[] {
+  const results: PluginUINode[] = [];
+  if (node.type === type) results.push(node);
+  for (const child of node.children ?? []) {
+    results.push(...findByType(child, type));
+  }
+  return results;
+}
+
+function latestView(uiViews: unknown[]): { root: PluginUINode } {
+  return uiViews[uiViews.length - 1] as { root: PluginUINode };
+}
+
+/** Number of points in the first series of the time-series node. */
+function seriesLen(uiViews: unknown[]): number {
+  const view = latestView(uiViews);
+  const [ts] = findByType(view.root, "time-series");
+  const series = ts?.props?.["series"] as { points: unknown[] }[] | undefined;
+  return series?.[0]?.points?.length ?? 0;
+}
+
+/** Number of events in the timeline node. */
+function timelineLen(uiViews: unknown[]): number {
+  const view = latestView(uiViews);
+  const [tl] = findByType(view.root, "timeline");
+  const events = tl?.props?.["events"] as unknown[] | undefined;
+  return events?.length ?? 0;
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -583,5 +619,80 @@ describe("register — teardown", () => {
     (teardown as () => void)();
     expect(timers.cleared).toHaveLength(1);
     expect(timers.cleared[0]).toBe(timers.handles[0]);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// History integration (quota + spawn recording)
+// ───────────────────────────────────────────────────────────────────────────
+
+describe("register — history: quota and spawn recording", () => {
+  it("boot records one quota sample (time-series series have 1 point each)", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    expect(seriesLen(fc.uiViews)).toBe(1);
+  });
+
+  it("tick records another quota sample (time-series series have 2 points each)", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    // drive one tick: call the interval fn then await async refresh to settle
+    timers.handles[0]!.fn();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(seriesLen(fc.uiViews)).toBe(2);
+  });
+
+  it("spawn does NOT record quota but DOES record a spawn event", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    const lenBefore = seriesLen(fc.uiViews);
+    const tlBefore = timelineLen(fc.uiViews);
+    runHook(fc.getHook(), "s1");
+    expect(seriesLen(fc.uiViews)).toBe(lenBefore);
+    expect(timelineLen(fc.uiViews)).toBe(tlBefore + 1);
+  });
+
+  it("spawn timestamp equals injected clock and label contains assigned account", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    runHook(fc.getHook(), "s1");
+    const view = latestView(fc.uiViews);
+    const [tl] = findByType(view.root, "timeline");
+    const events = tl?.props?.["events"] as { at: string; label: string }[];
+    const last = events[events.length - 1]!;
+    expect(last.at).toBe("2026-06-27T12:00:00.000Z");
+    expect(last.label).toMatch(/#\d+/);
   });
 });

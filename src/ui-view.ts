@@ -3,6 +3,7 @@ import type { ResolvedConfig } from "./config";
 import type { PoolAccount } from "./accounts";
 import type { SelectionState } from "./selection";
 import type { LastSpawn } from "./status";
+import { History, downsample, CHART_WINDOW, MAX_DETAILED_ACCOUNTS } from "./history";
 
 /** Build a `settings-panel` PluginUIView with the same data as buildStatus. */
 export function buildUIView(
@@ -12,6 +13,7 @@ export function buildUIView(
   state: SelectionState,
   lastSpawn: LastSpawn | null,
   lastError: string | null,
+  history: History = new History(),
 ): PluginUIView {
   const nodes: PluginUINode[] = [];
 
@@ -34,7 +36,8 @@ export function buildUIView(
   if (pool.length === 0) {
     nodes.push({ type: "text", props: { content: "No accounts" } });
   } else {
-    for (const acct of pool) {
+    const detailed = pool.slice(0, MAX_DETAILED_ACCOUNTS);
+    for (const acct of detailed) {
       const isReady = ready.has(acct.number);
       let badge: PluginUINode;
       if (isReady) {
@@ -84,6 +87,12 @@ export function buildUIView(
       };
       nodes.push(acctStack);
     }
+    if (pool.length > MAX_DETAILED_ACCOUNTS) {
+      nodes.push({
+        type: "text",
+        props: { content: `+${pool.length - MAX_DETAILED_ACCOUNTS} more accounts` },
+      });
+    }
   }
 
   // ── Assignments table ─────────────────────────────────────────────────────
@@ -123,6 +132,99 @@ export function buildUIView(
   } else {
     nodes.push({ type: "text", props: { content: "No spawns yet" } });
   }
+
+  // ── Graphical section ─────────────────────────────────────────────────────
+  const detailed = pool.slice(0, MAX_DETAILED_ACCOUNTS);
+
+  const fivePctFor = (a: PoolAccount) => a.fiveHourPct ?? 0;
+  const sevenPctFor = (a: PoolAccount) => a.sevenDayPct ?? 0;
+  const fiveCaptionFor = (a: PoolAccount) => (a.fiveHourPct !== null ? `${a.fiveHourPct}%` : "n/a");
+  const sevenCaptionFor = (a: PoolAccount) =>
+    a.sevenDayPct !== null ? `${a.sevenDayPct}%` : "n/a";
+  const toneFor = (pct: number) => (pct >= cfg.rateLimitPct ? "error" : "ok");
+  const quotaPointsFor = (a: PoolAccount) =>
+    downsample(
+      history.quotaFor(a.number).map((s) => s.five ?? 0),
+      CHART_WINDOW,
+    );
+
+  nodes.push({ type: "text", props: { content: "Graphics", weight: "bold" } });
+
+  for (const a of detailed) {
+    const fp = fivePctFor(a);
+    const sp = sevenPctFor(a);
+    nodes.push({
+      type: "stack",
+      props: { direction: "vertical" },
+      children: [
+        { type: "text", props: { content: `#${a.number} ${a.email}` } },
+        {
+          type: "gauge",
+          props: {
+            label: "5h",
+            value: fp,
+            max: 100,
+            tone: toneFor(fp),
+            caption: fiveCaptionFor(a),
+          },
+        },
+        {
+          type: "gauge",
+          props: {
+            label: "7d",
+            value: sp,
+            max: 100,
+            tone: toneFor(sp),
+            caption: sevenCaptionFor(a),
+          },
+        },
+        {
+          type: "sparkline",
+          props: { label: "5h trend", points: quotaPointsFor(a), tone: toneFor(fp) },
+        },
+      ],
+    });
+  }
+
+  nodes.push({
+    type: "time-series",
+    props: {
+      series: detailed.map((a) => ({
+        label: `#${a.number}`,
+        tone: toneFor(fivePctFor(a)),
+        points: quotaPointsFor(a),
+      })),
+      yMax: 100,
+      kind: "line",
+      caption: "5h %",
+    },
+  });
+
+  const assignmentCounts = new Map<number, number>();
+  for (const n of Object.values(state.assignments)) {
+    assignmentCounts.set(n, (assignmentCounts.get(n) ?? 0) + 1);
+  }
+  nodes.push({
+    type: "bar-chart",
+    props: {
+      bars: detailed.map((a) => ({
+        label: `#${a.number}`,
+        value: assignmentCounts.get(a.number) ?? 0,
+        tone: "neutral",
+      })),
+      orientation: "horizontal",
+    },
+  });
+
+  nodes.push({
+    type: "timeline",
+    props: {
+      events: history.recentSpawns().map((e) => ({
+        at: e.at,
+        label: `${e.sessionId} → #${e.accountNumber}`,
+      })),
+    },
+  });
 
   // ── Error callout ─────────────────────────────────────────────────────────
   if (lastError !== null) {

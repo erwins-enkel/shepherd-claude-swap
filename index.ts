@@ -11,6 +11,7 @@
 import type { PluginContext, SpawnPatch } from "./types";
 import { parseConfig } from "./src/config";
 import { Cswap, type Runner } from "./src/cswap";
+import { History } from "./src/history";
 import { cswapBackupRoot, sessionProfileDir } from "./src/paths";
 import { assign, type SelectionState } from "./src/selection";
 import { buildStatus, type LastSpawn } from "./src/status";
@@ -58,6 +59,7 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
     assignments: ctx.state.get<Record<string, number>>("assignments") ?? {},
   };
   let lastSpawn: LastSpawn | null = null;
+  const history = new History();
 
   const prewarmer = new Prewarmer({
     cswap,
@@ -74,19 +76,30 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
     );
     if (typeof ctx.publishUI === "function") {
       ctx.publishUI(
-        buildUIView(cfg, prewarmer.pool, prewarmer.ready, state, lastSpawn, prewarmer.lastError),
+        buildUIView(
+          cfg,
+          prewarmer.pool,
+          prewarmer.ready,
+          state,
+          lastSpawn,
+          prewarmer.lastError,
+          history,
+        ),
       );
     }
   };
 
   // ── Boot: list the pool, then await boot-warm of ≥1 account (the spawn-acceptance gate).
   await prewarmer.refresh();
+  history.recordQuota(prewarmer.pool);
   await prewarmer.bootWarm();
 
   // ── Background: refresh the pool + warm usable-not-ready accounts on a fixed tick.
   const tick = async (): Promise<void> => {
     await prewarmer.refresh();
     prewarmer.warmStale();
+    history.recordQuota(prewarmer.pool);
+    publish();
   };
   const intervalHandle = setIntervalFn(() => {
     void tick();
@@ -113,6 +126,11 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
         credentialDir,
         at: now(),
       };
+      history.recordSpawn({
+        sessionId: d.sessionId,
+        accountNumber: result.accountNumber,
+        at: lastSpawn.at,
+      });
       publish();
       return { credentialDir };
     }
