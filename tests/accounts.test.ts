@@ -108,7 +108,7 @@ describe("classifyPool — non-ok usageStatus", () => {
   ];
 
   for (const status of statusCases) {
-    it(`usageStatus="${status}" → usable:false, reason:"${status}"`, () => {
+    it(`usageStatus="${status}" → usable:false, reason:"${status}", usageUnavailable:false`, () => {
       const list: CswapListResult = {
         schemaVersion: 1,
         accounts: [
@@ -118,6 +118,7 @@ describe("classifyPool — non-ok usageStatus", () => {
       const pool = classifyPool(list, parseConfig({}));
       expect(pool[0]!.usable).toBe(false);
       expect(pool[0]!.reason).toBe(status);
+      expect(pool[0]!.usageUnavailable).toBe(false);
     });
   }
 });
@@ -173,6 +174,7 @@ describe("classifyPool — missing usage", () => {
     const pool = classifyPool(list, parseConfig({}));
     expect(pool[0]!.fiveHourPct).toBeNull();
     expect(pool[0]!.sevenDayPct).toBeNull();
+    expect(pool[0]!.usageUnavailable).toBe(true);
   });
 
   it("usage: null → not rate-limited (null pcts don't trigger rate-limit)", () => {
@@ -183,6 +185,35 @@ describe("classifyPool — missing usage", () => {
     const pool = classifyPool(list, parseConfig({ rateLimitPct: 0 }));
     expect(pool[0]!.usable).toBe(true);
     expect(pool[0]!.rateLimited).toBe(false);
+    expect(pool[0]!.usageUnavailable).toBe(true);
+  });
+
+  it("both-null pcts + ok → usable:true, usageUnavailable:true", () => {
+    // usage: {} has no windows → both pcts null → usageUnavailable
+    const list: CswapListResult = {
+      schemaVersion: 1,
+      accounts: [{ number: 1, email: "a@b.com", active: true, usageStatus: "ok", usage: {} }],
+    };
+    const pool = classifyPool(list, parseConfig({}));
+    expect(pool[0]!.usable).toBe(true);
+    expect(pool[0]!.usageUnavailable).toBe(true);
+  });
+
+  it("one window present (sevenDay only) → usageUnavailable:false", () => {
+    const list: CswapListResult = {
+      schemaVersion: 1,
+      accounts: [
+        {
+          number: 1,
+          email: "a@b.com",
+          active: true,
+          usageStatus: "ok",
+          usage: { sevenDay: { pct: 50 } },
+        },
+      ],
+    };
+    const pool = classifyPool(list, parseConfig({}));
+    expect(pool[0]!.usageUnavailable).toBe(false);
   });
 
   it("missing fiveHour window → fiveHourPct is null", () => {

@@ -16,6 +16,7 @@ function makeAccount(number: number, opts: Partial<PoolAccount> = {}): PoolAccou
     fiveHourPct: 10,
     sevenDayPct: 20,
     active: true,
+    usageUnavailable: false,
     ...opts,
   };
 }

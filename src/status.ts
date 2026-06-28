@@ -45,6 +45,7 @@ export function buildStatus(
       sevenDayPct: acct.sevenDayPct,
       active: acct.active,
       ready: ready.has(acct.number),
+      usageUnavailable: acct.usageUnavailable,
     })),
     assignments: state.assignments,
     cursor: state.cursor,

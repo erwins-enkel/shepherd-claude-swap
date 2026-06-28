@@ -14,9 +14,10 @@ function makeAccount(number: number, opts: Partial<PoolAccount> = {}): PoolAccou
     usable: true,
     rateLimited: false,
     reason: null,
-    fiveHourPct: null,
-    sevenDayPct: null,
+    fiveHourPct: 10,
+    sevenDayPct: 10,
     active: true,
+    usageUnavailable: false,
     ...opts,
   };
 }
@@ -393,10 +394,10 @@ describe("assign — least-used", () => {
     }
   });
 
-  it("null-pct account (metric=100) loses to known-low-pct account", () => {
+  it("usageUnavailable account not chosen over ready known account (tier logic)", () => {
     const pool = [
-      makeAccount(1, { fiveHourPct: null, sevenDayPct: null }), // metric=100
-      makeAccount(2, { fiveHourPct: 10, sevenDayPct: 10 }), // metric=10
+      makeAccount(1, { usageUnavailable: true }),
+      makeAccount(2, { fiveHourPct: 10, sevenDayPct: 10 }), // known
     ];
     const ready = new Set([1, 2]);
 
@@ -405,8 +406,8 @@ describe("assign — least-used", () => {
     if (result.kind === "assigned") expect(result.accountNumber).toBe(2);
   });
 
-  it("null-pct account is still assigned when it is the only eligible", () => {
-    const pool = [makeAccount(1, { fiveHourPct: null, sevenDayPct: null })];
+  it("single ready usageUnavailable account is assigned (fallback tier)", () => {
+    const pool = [makeAccount(1, { usageUnavailable: true })];
     const ready = new Set([1]);
 
     const result = assign(emptyState, "s1", pool, ready, "least-used");
@@ -453,5 +454,59 @@ describe("assign — least-used", () => {
     const result = assign(emptyState, "s1", pool, ready, "least-used");
     expect(result.kind).toBe("assigned");
     if (result.kind === "assigned") expect(result.accountNumber).toBe(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Two-tier selection (usage-unavailable deprioritization)
+// ---------------------------------------------------------------------------
+
+describe("assign — two-tier selection", () => {
+  it("known and unavailable both ready → known picked (round-robin)", () => {
+    const pool = [makeAccount(1, { usageUnavailable: true }), makeAccount(2)];
+    const ready = new Set([1, 2]);
+    const result = assign(emptyState, "s1", pool, ready, "round-robin");
+    expect(result.kind).toBe("assigned");
+    if (result.kind === "assigned") expect(result.accountNumber).toBe(2);
+  });
+
+  it("known and unavailable both ready → known picked (least-used)", () => {
+    const pool = [makeAccount(1, { usageUnavailable: true }), makeAccount(2)];
+    const ready = new Set([1, 2]);
+    const result = assign(emptyState, "s1", pool, ready, "least-used");
+    expect(result.kind).toBe("assigned");
+    if (result.kind === "assigned") expect(result.accountNumber).toBe(2);
+  });
+
+  it("all-unavailable ready → an unavailable account picked (last resort, not abort)", () => {
+    const pool = [
+      makeAccount(1, { usageUnavailable: true }),
+      makeAccount(2, { usageUnavailable: true }),
+    ];
+    const ready = new Set([1, 2]);
+    const result = assign(emptyState, "s1", pool, ready, "round-robin");
+    expect(result.kind).toBe("assigned");
+  });
+
+  it("pinned usageUnavailable account that is ready → assigned (not abort)", () => {
+    const state: SelectionState = { cursor: 0, assignments: { s1: 1 } };
+    const pool = [makeAccount(1, { usageUnavailable: true })];
+    const result = assign(state, "s1", pool, new Set([1]), "round-robin");
+    expect(result.kind).toBe("assigned");
+    if (result.kind === "assigned") {
+      expect(result.accountNumber).toBe(1);
+      expect(result.nextState).toBe(state);
+    }
+  });
+
+  it("pinned usageUnavailable account not ready → warm (not abort)", () => {
+    const state: SelectionState = { cursor: 0, assignments: { s1: 1 } };
+    const pool = [makeAccount(1, { usageUnavailable: true })];
+    const result = assign(state, "s1", pool, new Set<number>(), "round-robin");
+    expect(result.kind).toBe("warm");
+    if (result.kind === "warm") {
+      expect(result.accountNumber).toBe(1);
+      expect(result.nextState).toBe(state);
+    }
   });
 });

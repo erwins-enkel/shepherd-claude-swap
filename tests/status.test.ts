@@ -19,6 +19,7 @@ function makeAccount(number: number, opts: Partial<PoolAccount> = {}): PoolAccou
     fiveHourPct: 10,
     sevenDayPct: 20,
     active: true,
+    usageUnavailable: false,
     ...opts,
   };
 }
@@ -110,7 +111,7 @@ describe("buildStatus — pool section", () => {
     expect(p).toHaveLength(pool.length);
   });
 
-  it("each pool entry has number, email, usable, rateLimited, fiveHourPct, sevenDayPct, ready", () => {
+  it("each pool entry has number, email, usable, rateLimited, fiveHourPct, sevenDayPct, ready, usageUnavailable", () => {
     const s = buildStatus(cfg, pool, ready, baseState, null, null);
     const p = s["pool"] as Record<string, unknown>[];
     for (const entry of p) {
@@ -121,6 +122,7 @@ describe("buildStatus — pool section", () => {
       expect(entry).toHaveProperty("fiveHourPct");
       expect(entry).toHaveProperty("sevenDayPct");
       expect(entry).toHaveProperty("ready");
+      expect(entry).toHaveProperty("usageUnavailable");
     }
   });
 

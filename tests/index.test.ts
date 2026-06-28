@@ -696,3 +696,75 @@ describe("register — history: quota and spawn recording", () => {
     expect(last.label).toMatch(/#\d+/);
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// Two-tier selection: usage-unavailable deprioritization (e2e)
+// ───────────────────────────────────────────────────────────────────────────
+
+const knownAndUnavailableList = {
+  schemaVersion: 1,
+  accounts: [
+    {
+      number: 1,
+      email: "acct1@example.com",
+      active: false,
+      usageStatus: "ok",
+      usage: { fiveHour: { pct: 10 }, sevenDay: { pct: 10 } },
+    },
+    {
+      number: 2,
+      email: "acct2@example.com",
+      active: false,
+      usageStatus: "ok",
+      usage: null, // usageUnavailable
+    },
+  ],
+};
+
+const onlyUnavailableList = {
+  schemaVersion: 1,
+  accounts: [
+    {
+      number: 1,
+      email: "acct1@example.com",
+      active: false,
+      usageStatus: "ok",
+      usage: null, // usageUnavailable
+    },
+  ],
+};
+
+describe("register — two-tier selection (usage-unavailable e2e)", () => {
+  it("known ready + unavailable ready → picks known account", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true, listResult: knownAndUnavailableList });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    runHook(fc.getHook(), "s1");
+    const assignments = JSON.parse(fc.store.get("assignments")!) as Record<string, number>;
+    expect(assignments["s1"]).toBe(1); // known account, not unavailable #2
+  });
+
+  it("only unavailable ready → assigned (last-resort, not abort)", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true, listResult: onlyUnavailableList });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx({ config: { abortOnEmpty: true } });
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    // fallback tier means assign() returns "assigned", so no abort even with abortOnEmpty
+    expect(() => runHook(fc.getHook(), "s1")).not.toThrow();
+    const assignments = JSON.parse(fc.store.get("assignments")!) as Record<string, number>;
+    expect(assignments["s1"]).toBe(1);
+  });
+});

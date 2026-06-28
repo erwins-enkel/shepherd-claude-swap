@@ -21,6 +21,7 @@ function makeAccount(number: number, opts: Partial<PoolAccount> = {}): PoolAccou
     fiveHourPct: 20,
     sevenDayPct: 30,
     active: true,
+    usageUnavailable: false,
     ...opts,
   };
 }
@@ -50,7 +51,7 @@ const cfgWith80Pct = parseConfig({ rateLimitPct: 80 });
 const pool: PoolAccount[] = [
   makeAccount(1, { fiveHourPct: 40, sevenDayPct: 50 }), // ready, usable
   makeAccount(2, { rateLimited: true, fiveHourPct: 95, sevenDayPct: 99 }), // rate-limited
-  makeAccount(3, { fiveHourPct: null, sevenDayPct: null }), // usable, warming (not in ready)
+  makeAccount(3, { fiveHourPct: 30, sevenDayPct: 40 }), // usable, warming (not in ready)
 ];
 const ready = new Set([1]);
 const baseState: SelectionState = {
@@ -288,6 +289,75 @@ describe("buildUIView — empty pool", () => {
     const textNodes = findByType(v.root, "text");
     const noAcctsText = textNodes.find((t) => t.props?.["content"] === "No accounts");
     expect(noAcctsText).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Quota-unknown account
+// ---------------------------------------------------------------------------
+
+describe("buildUIView — quota-unknown account", () => {
+  const unknownPool = [makeAccount(10, { usageUnavailable: true })];
+
+  it("badge label is 'quota unknown'", () => {
+    const v = buildUIView(cfg, unknownPool, new Set(), baseState, null, null);
+    const badges = findByType(v.root, "badge");
+    const unknownBadge = badges.find((b) => b.props?.["label"] === "quota unknown");
+    expect(unknownBadge).toBeTruthy();
+    expect(unknownBadge?.props?.["tone"]).toBe("warn");
+  });
+
+  it("'quota unknown — deprioritized; re-checked next refresh' text node is present", () => {
+    const v = buildUIView(cfg, unknownPool, new Set(), baseState, null, null);
+    const texts = findByType(v.root, "text");
+    const found = texts.find(
+      (t) => t.props?.["content"] === "quota unknown — deprioritized; re-checked next refresh",
+    );
+    expect(found).toBeTruthy();
+  });
+
+  it("no meter node for quota-unknown account", () => {
+    const v = buildUIView(cfg, unknownPool, new Set(), baseState, null, null);
+    const meters = findByType(v.root, "meter");
+    expect(meters.length).toBe(0);
+  });
+
+  it("no gauge node for quota-unknown account", () => {
+    const v = buildUIView(cfg, unknownPool, new Set(), baseState, null, null);
+    const gauges = findByType(v.root, "gauge");
+    expect(gauges.length).toBe(0);
+  });
+
+  it("no sparkline node for quota-unknown account", () => {
+    const v = buildUIView(cfg, unknownPool, new Set(), baseState, null, null);
+    const sparklines = findByType(v.root, "sparkline");
+    expect(sparklines.length).toBe(0);
+  });
+
+  it("quota-unknown account absent from time-series series", () => {
+    const v = buildUIView(cfg, unknownPool, new Set(), baseState, null, null);
+    const ts = findByType(v.root, "time-series");
+    const series = ts[0]?.props?.["series"] as Array<{ label: string }>;
+    const inSeries = series?.some((s) => s.label === "#10");
+    expect(inSeries).toBeFalsy();
+    expect(series?.length).toBe(0);
+  });
+
+  it("badge precedence: quota-unknown account in ready set shows 'quota unknown', not 'ready'", () => {
+    const v = buildUIView(cfg, unknownPool, new Set([10]), baseState, null, null);
+    const badges = findByType(v.root, "badge");
+    const readyBadge = badges.find((b) => b.props?.["label"] === "ready");
+    expect(readyBadge).toBeUndefined();
+    const unknownBadge = badges.find((b) => b.props?.["label"] === "quota unknown");
+    expect(unknownBadge).toBeTruthy();
+  });
+
+  it("time-series caption mentions hidden count when unavailable accounts omitted", () => {
+    const mixedPool = [makeAccount(1, { fiveHourPct: 10, sevenDayPct: 10 }), ...unknownPool];
+    const v = buildUIView(cfg, mixedPool, new Set(), baseState, null, null);
+    const ts = findByType(v.root, "time-series");
+    const caption = ts[0]?.props?.["caption"] as string;
+    expect(caption).toContain("hidden: quota unknown");
   });
 });
 

@@ -10,6 +10,7 @@ export interface PoolAccount {
   fiveHourPct: number | null;
   sevenDayPct: number | null;
   active: boolean;
+  usageUnavailable: boolean;
 }
 
 /**
@@ -33,6 +34,7 @@ export function classifyPool(list: CswapListResult, cfg: ResolvedConfig): PoolAc
         fiveHourPct,
         sevenDayPct,
         active: acct.active,
+        usageUnavailable: false,
       };
     }
 
@@ -47,6 +49,7 @@ export function classifyPool(list: CswapListResult, cfg: ResolvedConfig): PoolAc
         fiveHourPct,
         sevenDayPct,
         active: acct.active,
+        usageUnavailable: false,
       };
     }
 
@@ -61,6 +64,7 @@ export function classifyPool(list: CswapListResult, cfg: ResolvedConfig): PoolAc
         fiveHourPct,
         sevenDayPct,
         active: acct.active,
+        usageUnavailable: false,
       };
     }
 
@@ -78,6 +82,7 @@ export function classifyPool(list: CswapListResult, cfg: ResolvedConfig): PoolAc
       fiveHourPct,
       sevenDayPct,
       active: acct.active,
+      usageUnavailable: fiveHourPct === null && sevenDayPct === null,
     };
   });
 }
