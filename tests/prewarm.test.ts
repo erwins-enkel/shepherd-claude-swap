@@ -196,3 +196,114 @@ describe("Prewarmer — active account exclusion", () => {
     expect(prewarmedAccounts).toContain(2);
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// Task 2 — active-prune, drop helpers, switch-in-progress guard
+// ───────────────────────────────────────────────────────────────────────────
+
+describe("Prewarmer.refresh — active-account prune", () => {
+  it("removes active account from ready on refresh", async () => {
+    const { prewarmer } = makePrewarmer();
+    await prewarmer.refresh();
+    // Manually seed account 1 (active) into ready
+    prewarmer.ready.add(1);
+    // Refresh again — active account must be pruned
+    await prewarmer.refresh();
+    expect(prewarmer.ready.has(1)).toBe(false);
+  });
+
+  it("keeps a non-active usable account in ready on refresh", async () => {
+    const { prewarmer } = makePrewarmer();
+    await prewarmer.refresh();
+    // Manually seed account 2 (non-active, usable) into ready
+    prewarmer.ready.add(2);
+    await prewarmer.refresh();
+    expect(prewarmer.ready.has(2)).toBe(true);
+  });
+});
+
+describe("Prewarmer.dropReady", () => {
+  it("removes exactly the named account from ready", () => {
+    const { prewarmer } = makePrewarmer();
+    prewarmer.ready.add(1);
+    prewarmer.ready.add(2);
+    prewarmer.dropReady(1);
+    expect(prewarmer.ready.has(1)).toBe(false);
+    expect(prewarmer.ready.has(2)).toBe(true);
+  });
+
+  it("is a no-op when account is not in ready", () => {
+    const { prewarmer } = makePrewarmer();
+    prewarmer.ready.add(2);
+    prewarmer.dropReady(1);
+    expect(prewarmer.ready.has(2)).toBe(true);
+  });
+});
+
+describe("Prewarmer.clearReady", () => {
+  it("empties ready", () => {
+    const { prewarmer } = makePrewarmer();
+    prewarmer.ready.add(1);
+    prewarmer.ready.add(2);
+    prewarmer.clearReady();
+    expect(prewarmer.ready.size).toBe(0);
+  });
+});
+
+describe("Prewarmer — switch-in-progress guard", () => {
+  it("isSwitching is false initially", () => {
+    const { prewarmer } = makePrewarmer();
+    expect(prewarmer.isSwitching).toBe(false);
+  });
+
+  it("isSwitching is true after beginSwitch, false after endSwitch", () => {
+    const { prewarmer } = makePrewarmer();
+    prewarmer.beginSwitch();
+    expect(prewarmer.isSwitching).toBe(true);
+    prewarmer.endSwitch();
+    expect(prewarmer.isSwitching).toBe(false);
+  });
+
+  it("warm() does not add account to ready while switching", async () => {
+    const { prewarmer } = makePrewarmer();
+    await prewarmer.refresh();
+    prewarmer.beginSwitch();
+    await prewarmer.warm(2);
+    expect(prewarmer.ready.has(2)).toBe(false);
+  });
+
+  it("warm() adds account to ready after endSwitch", async () => {
+    const { prewarmer } = makePrewarmer();
+    await prewarmer.refresh();
+    prewarmer.beginSwitch();
+    await prewarmer.warm(2);
+    expect(prewarmer.ready.has(2)).toBe(false);
+    prewarmer.endSwitch();
+    await prewarmer.warm(2);
+    expect(prewarmer.ready.has(2)).toBe(true);
+  });
+
+  it("warmStale() does not kick any warms while switching", async () => {
+    const { runner, prewarmedAccounts } = makeTrackingRunner();
+    const { prewarmer } = makePrewarmer({ cswap: new Cswap("cswap", runner) });
+    await prewarmer.refresh();
+    prewarmer.beginSwitch();
+    prewarmer.warmStale();
+    await prewarmer.drain();
+    expect(prewarmedAccounts).toHaveLength(0);
+  });
+
+  it("warmStale() resumes warms after endSwitch", async () => {
+    const { runner, prewarmedAccounts } = makeTrackingRunner();
+    const { prewarmer } = makePrewarmer({ cswap: new Cswap("cswap", runner) });
+    await prewarmer.refresh();
+    prewarmer.beginSwitch();
+    prewarmer.warmStale();
+    await prewarmer.drain();
+    expect(prewarmedAccounts).toHaveLength(0);
+    prewarmer.endSwitch();
+    prewarmer.warmStale();
+    await prewarmer.drain();
+    expect(prewarmedAccounts).toContain(2);
+  });
+});

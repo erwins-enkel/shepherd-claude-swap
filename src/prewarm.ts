@@ -41,6 +41,7 @@ export class Prewarmer {
   private readonly existsSync: (path: string) => boolean;
   /** De-dupes concurrent warms of the same account. */
   private readonly inFlight = new Map<number, Promise<void>>();
+  private switching = false;
 
   constructor(deps: PrewarmerDeps) {
     this.cswap = deps.cswap;
@@ -62,7 +63,7 @@ export class Prewarmer {
       this.pool = classifyPool(list, this.cfg);
       for (const n of [...this.ready]) {
         const acct = this.pool.find((a) => a.number === n);
-        if (!acct || !acct.usable || acct.rateLimited) {
+        if (!acct || !acct.usable || acct.rateLimited || acct.active) {
           this.ready.delete(n);
         }
       }
@@ -108,6 +109,7 @@ export class Prewarmer {
       }
       const dir = sessionProfileDir(this.backupRoot, accountNumber, acct.email);
       if (this.existsSync(dir)) {
+        if (this.switching) return; // suppressed during an operator switch — do NOT mark ready
         this.ready.add(accountNumber);
       } else {
         this.log.warn(
@@ -122,8 +124,33 @@ export class Prewarmer {
     return p;
   }
 
+  /** Synchronously remove one account from `ready`. */
+  dropReady(accountNumber: number): void {
+    this.ready.delete(accountNumber);
+  }
+
+  /** Synchronously empty `ready`. */
+  clearReady(): void {
+    this.ready.clear();
+  }
+
+  /** Enter a switch: suppress ready re-population until endSwitch(). */
+  beginSwitch(): void {
+    this.switching = true;
+  }
+
+  /** Leave a switch. */
+  endSwitch(): void {
+    this.switching = false;
+  }
+
+  get isSwitching(): boolean {
+    return this.switching;
+  }
+
   /** Warm every usable, non-rate-limited account that is not yet ready (fire-and-forget). */
   warmStale(): void {
+    if (this.switching) return;
     for (const acct of this.pool) {
       // Skip the active cswap account: `cswap run <active>` uses the default ~/.claude and
       // creates no isolated session profile, so warming it is futile and would spam every cycle.
