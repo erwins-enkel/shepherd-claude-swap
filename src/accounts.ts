@@ -9,6 +9,12 @@ export interface PoolAccount {
   reason: string | null;
   fiveHourPct: number | null;
   sevenDayPct: number | null;
+  fiveHourResetsAt: string | null;
+  sevenDayResetsAt: string | null;
+  fiveHourResetClock: string | null;
+  sevenDayResetClock: string | null;
+  fiveHourResetCountdown: string | null;
+  sevenDayResetCountdown: string | null;
   active: boolean;
   usageUnavailable: boolean;
 }
@@ -22,6 +28,14 @@ export function classifyPool(list: CswapListResult, cfg: ResolvedConfig): PoolAc
   return list.accounts.map((acct) => {
     const fiveHourPct = acct.usage?.fiveHour?.pct ?? null;
     const sevenDayPct = acct.usage?.sevenDay?.pct ?? null;
+    const resetFields = {
+      fiveHourResetsAt: acct.usage?.fiveHour?.resetsAt ?? null,
+      sevenDayResetsAt: acct.usage?.sevenDay?.resetsAt ?? null,
+      fiveHourResetClock: acct.usage?.fiveHour?.clock ?? null,
+      sevenDayResetClock: acct.usage?.sevenDay?.clock ?? null,
+      fiveHourResetCountdown: acct.usage?.fiveHour?.countdown ?? null,
+      sevenDayResetCountdown: acct.usage?.sevenDay?.countdown ?? null,
+    };
 
     // Non-ok usageStatus: unusable, reason = status value
     if (acct.usageStatus !== "ok") {
@@ -33,6 +47,7 @@ export function classifyPool(list: CswapListResult, cfg: ResolvedConfig): PoolAc
         reason: acct.usageStatus,
         fiveHourPct,
         sevenDayPct,
+        ...resetFields,
         active: acct.active,
         usageUnavailable: false,
       };
@@ -48,6 +63,7 @@ export function classifyPool(list: CswapListResult, cfg: ResolvedConfig): PoolAc
         reason: "excluded-slot",
         fiveHourPct,
         sevenDayPct,
+        ...resetFields,
         active: acct.active,
         usageUnavailable: false,
       };
@@ -63,6 +79,7 @@ export function classifyPool(list: CswapListResult, cfg: ResolvedConfig): PoolAc
         reason: "not-in-include",
         fiveHourPct,
         sevenDayPct,
+        ...resetFields,
         active: acct.active,
         usageUnavailable: false,
       };
@@ -81,6 +98,7 @@ export function classifyPool(list: CswapListResult, cfg: ResolvedConfig): PoolAc
       reason: null,
       fiveHourPct,
       sevenDayPct,
+      ...resetFields,
       active: acct.active,
       usageUnavailable: fiveHourPct === null && sevenDayPct === null,
     };

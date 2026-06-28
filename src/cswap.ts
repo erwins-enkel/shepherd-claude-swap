@@ -4,6 +4,8 @@ import { promisify } from "node:util";
 export interface CswapUsageWindow {
   pct: number;
   resetsAt?: string;
+  countdown?: string;
+  clock?: string;
 }
 
 export interface CswapAccount {

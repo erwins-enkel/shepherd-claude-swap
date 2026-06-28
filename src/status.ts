@@ -43,6 +43,8 @@ export function buildStatus(
       reason: acct.reason,
       fiveHourPct: acct.fiveHourPct,
       sevenDayPct: acct.sevenDayPct,
+      fiveHourResetsAt: acct.fiveHourResetsAt,
+      sevenDayResetsAt: acct.sevenDayResetsAt,
       active: acct.active,
       ready: ready.has(acct.number),
       usageUnavailable: acct.usageUnavailable,

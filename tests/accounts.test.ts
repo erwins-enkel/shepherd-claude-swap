@@ -46,6 +46,27 @@ describe("classifyPool — fixture baseline", () => {
     expect(pool[1]!.fiveHourPct).toBe(0);
     expect(pool[1]!.sevenDayPct).toBe(98);
   });
+
+  it("carries reset fields (resetsAt/clock/countdown) from fixture", () => {
+    const pool = classifyPool(fixture, parseConfig({}));
+    // acct1: both windows have full reset data
+    expect(pool[0]!.fiveHourResetsAt).toBe("2026-06-27T20:00:00.277424+00:00");
+    expect(pool[0]!.fiveHourResetClock).toBe("22:00");
+    expect(pool[0]!.fiveHourResetCountdown).toBe("1h 43m");
+    expect(pool[0]!.sevenDayResetsAt).toBe("2026-07-04T15:00:00.277447+00:00");
+    expect(pool[0]!.sevenDayResetClock).toBe("Jul 4 17:00");
+    expect(pool[0]!.sevenDayResetCountdown).toBe("6d 20h");
+  });
+
+  it("reset fields are null when the window omits them (acct2 fiveHour has only pct)", () => {
+    const pool = classifyPool(fixture, parseConfig({}));
+    expect(pool[1]!.fiveHourResetsAt).toBeNull();
+    expect(pool[1]!.fiveHourResetClock).toBeNull();
+    expect(pool[1]!.fiveHourResetCountdown).toBeNull();
+    // acct2 sevenDay still carries reset data
+    expect(pool[1]!.sevenDayResetClock).toBe("Jun 30 00:00");
+    expect(pool[1]!.sevenDayResetCountdown).toBe("2d 3h");
+  });
 });
 
 describe("classifyPool — rate-limit threshold", () => {

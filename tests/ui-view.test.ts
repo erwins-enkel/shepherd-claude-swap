@@ -20,6 +20,12 @@ function makeAccount(number: number, opts: Partial<PoolAccount> = {}): PoolAccou
     reason: null,
     fiveHourPct: 20,
     sevenDayPct: 30,
+    fiveHourResetsAt: null,
+    sevenDayResetsAt: null,
+    fiveHourResetClock: null,
+    sevenDayResetClock: null,
+    fiveHourResetCountdown: null,
+    sevenDayResetCountdown: null,
     active: true,
     usageUnavailable: false,
     ...opts,
@@ -195,6 +201,39 @@ describe("buildUIView — meter tones", () => {
       expect(m.props?.["value"]).toBe(0);
       expect(m.props?.["caption"]).toBe("n/a");
     }
+  });
+
+  it("caption appends 'resets <clock> (<countdown>)' when reset data present", () => {
+    const resetPool = [
+      makeAccount(7, {
+        fiveHourPct: 93,
+        fiveHourResetClock: "22:00",
+        fiveHourResetCountdown: "1h 43m",
+      }),
+    ];
+    const v = buildUIView(cfg, resetPool, new Set([7]), baseState, null, null);
+    const captions = findByType(v.root, "meter").map((m) => m.props?.["caption"]);
+    expect(captions).toContain("93% · resets 22:00 (1h 43m)");
+  });
+
+  it("caption shows clock without empty parens when countdown is missing", () => {
+    const resetPool = [
+      makeAccount(8, {
+        fiveHourPct: 50,
+        fiveHourResetClock: "22:00",
+        fiveHourResetCountdown: null,
+      }),
+    ];
+    const v = buildUIView(cfg, resetPool, new Set([8]), baseState, null, null);
+    const captions = findByType(v.root, "meter").map((m) => m.props?.["caption"]);
+    expect(captions).toContain("50% · resets 22:00");
+  });
+
+  it("no reset suffix when clock is absent (caption stays bare pct)", () => {
+    const noClockPool = [makeAccount(6, { fiveHourPct: 40, fiveHourResetClock: null })];
+    const v = buildUIView(cfg, noClockPool, new Set([6]), baseState, null, null);
+    const captions = findByType(v.root, "meter").map((m) => m.props?.["caption"]);
+    expect(captions).toContain("40%");
   });
 });
 
