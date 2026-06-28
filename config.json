@@ -2,10 +2,10 @@
   "cswapBin": "cswap",
   "includeSlots": null,
   "excludeSlots": [],
-  "rateLimitPct": 100,
-  "strategy": "round-robin",
+  "rateLimitPct": 90,
+  "strategy": "least-used",
   "prewarmArgs": ["--version"],
-  "refreshIntervalMs": 60000,
+  "refreshIntervalMs": 600000,
   "bootWarmTimeoutMs": 30000,
   "abortOnEmpty": true
 }
