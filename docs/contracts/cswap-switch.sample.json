@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "switched": false,
+  "from": { "number": 3, "email": "pat@ovr.ltd" },
+  "to": { "number": 3, "email": "pat@ovr.ltd" },
+  "strategy": "direct",
+  "reason": "already-active",
+  "message": "Already on Account-3 (pat@ovr.ltd)",
+  "warnings": []
+}

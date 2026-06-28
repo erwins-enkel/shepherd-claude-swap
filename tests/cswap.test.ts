@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { Cswap, type Runner } from "../src/cswap";
 import fixtureRaw from "../docs/contracts/cswap-list.sample.json";
+import switchFixtureRaw from "../docs/contracts/cswap-switch.sample.json";
 
 /** Capture the last call to the runner. */
 function makeRunner(response: {
@@ -18,6 +19,7 @@ function makeRunner(response: {
 }
 
 const fixtureStdout = JSON.stringify(fixtureRaw);
+const switchFixtureStdout = JSON.stringify(switchFixtureRaw);
 
 describe("Cswap.list()", () => {
   it("passes correct argv to runner: ['--list','--json']", async () => {
@@ -222,5 +224,147 @@ describe("Cswap.prewarm()", () => {
     const cswap = new Cswap("cswap", runner);
     await cswap.prewarm(3, ["--flag", "value"], 10000);
     expect(calls[0]!.args).toEqual(["run", "3", "--", "--flag", "value"]);
+  });
+});
+
+describe("Cswap.switch()", () => {
+  it("passes argv ['--switch','--json'] for plain switch()", async () => {
+    const { runner, calls } = makeRunner({
+      stdout: switchFixtureStdout,
+      stderr: "",
+      code: 0,
+      timedOut: false,
+    });
+    const cswap = new Cswap("cswap", runner);
+    await cswap.switch();
+    expect(calls[0]!.args).toEqual(["--switch", "--json"]);
+  });
+
+  it("passes argv ['--switch','--strategy','best','--json'] for switch('best')", async () => {
+    const { runner, calls } = makeRunner({
+      stdout: switchFixtureStdout,
+      stderr: "",
+      code: 0,
+      timedOut: false,
+    });
+    const cswap = new Cswap("cswap", runner);
+    await cswap.switch("best");
+    expect(calls[0]!.args).toEqual(["--switch", "--strategy", "best", "--json"]);
+  });
+
+  it("throws on timeout", async () => {
+    const { runner } = makeRunner({ stdout: "", stderr: "", code: 1, timedOut: true });
+    const cswap = new Cswap("cswap", runner);
+    await expect(cswap.switch()).rejects.toThrow();
+  });
+
+  it("throws on non-zero exit code", async () => {
+    const { runner } = makeRunner({
+      stdout: "",
+      stderr: "cswap: fatal error",
+      code: 1,
+      timedOut: false,
+    });
+    const cswap = new Cswap("cswap", runner);
+    await expect(cswap.switch()).rejects.toThrow();
+  });
+
+  it("throws on non-JSON stdout", async () => {
+    const { runner } = makeRunner({ stdout: "not json", stderr: "", code: 0, timedOut: false });
+    const cswap = new Cswap("cswap", runner);
+    await expect(cswap.switch()).rejects.toThrow();
+  });
+
+  it("throws on schemaVersion !== 1", async () => {
+    const payload = JSON.stringify({ schemaVersion: 2, switched: false });
+    const { runner } = makeRunner({ stdout: payload, stderr: "", code: 0, timedOut: false });
+    const cswap = new Cswap("cswap", runner);
+    await expect(cswap.switch()).rejects.toThrow();
+  });
+});
+
+describe("Cswap.switchTo()", () => {
+  it("passes argv ['--switch-to','2','--json'] for switchTo(2)", async () => {
+    const { runner, calls } = makeRunner({
+      stdout: switchFixtureStdout,
+      stderr: "",
+      code: 0,
+      timedOut: false,
+    });
+    const cswap = new Cswap("cswap", runner);
+    await cswap.switchTo(2);
+    expect(calls[0]!.args).toEqual(["--switch-to", "2", "--json"]);
+  });
+
+  it("returns parsed result for switchTo(3)", async () => {
+    const { runner } = makeRunner({
+      stdout: switchFixtureStdout,
+      stderr: "",
+      code: 0,
+      timedOut: false,
+    });
+    const cswap = new Cswap("cswap", runner);
+    const result = await cswap.switchTo(3);
+    expect(result.schemaVersion).toBe(1);
+    expect(result.switched).toBe(false);
+    expect(result.strategy).toBe("direct");
+    expect(result.from.number).toBe(3);
+    expect(result.from.email).toBe("pat@ovr.ltd");
+  });
+
+  it("resolves without throwing when switched:false (already-active)", async () => {
+    const { runner } = makeRunner({
+      stdout: switchFixtureStdout,
+      stderr: "",
+      code: 0,
+      timedOut: false,
+    });
+    const cswap = new Cswap("cswap", runner);
+    const result = await cswap.switchTo(3);
+    expect(result.switched).toBe(false);
+    expect(result.reason).toBe("already-active");
+  });
+
+  it("throws on structured error envelope containing type and message", async () => {
+    const payload = JSON.stringify({
+      schemaVersion: 1,
+      error: { type: "AccountNotFoundError", message: "Account-999 does not exist" },
+    });
+    const { runner } = makeRunner({ stdout: payload, stderr: "", code: 0, timedOut: false });
+    const cswap = new Cswap("cswap", runner);
+    const err = await cswap.switchTo(999).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain("AccountNotFoundError");
+    expect((err as Error).message).toContain("Account-999 does not exist");
+  });
+
+  it("throws on timeout", async () => {
+    const { runner } = makeRunner({ stdout: "", stderr: "", code: 1, timedOut: true });
+    const cswap = new Cswap("cswap", runner);
+    await expect(cswap.switchTo(1)).rejects.toThrow();
+  });
+
+  it("throws on non-zero exit code", async () => {
+    const { runner } = makeRunner({
+      stdout: "",
+      stderr: "fatal error",
+      code: 2,
+      timedOut: false,
+    });
+    const cswap = new Cswap("cswap", runner);
+    await expect(cswap.switchTo(1)).rejects.toThrow();
+  });
+
+  it("throws on non-JSON stdout", async () => {
+    const { runner } = makeRunner({ stdout: "not json", stderr: "", code: 0, timedOut: false });
+    const cswap = new Cswap("cswap", runner);
+    await expect(cswap.switchTo(1)).rejects.toThrow();
+  });
+
+  it("throws on schemaVersion !== 1", async () => {
+    const payload = JSON.stringify({ schemaVersion: 99, switched: true });
+    const { runner } = makeRunner({ stdout: payload, stderr: "", code: 0, timedOut: false });
+    const cswap = new Cswap("cswap", runner);
+    await expect(cswap.switchTo(1)).rejects.toThrow();
   });
 });

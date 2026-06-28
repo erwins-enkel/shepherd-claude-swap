@@ -22,6 +22,22 @@ export interface CswapListResult {
   accounts: CswapAccount[];
 }
 
+export interface CswapSwitchRef {
+  number: number | null;
+  email: string;
+}
+
+export interface CswapSwitchResult {
+  schemaVersion: number;
+  switched: boolean;
+  from: CswapSwitchRef;
+  to: CswapSwitchRef;
+  strategy: string;
+  reason: string;
+  message: string;
+  warnings: string[];
+}
+
 /**
  * Injectable runner for tests: runs argv, resolves {stdout,stderr,code,timedOut}.
  * Default impl uses node:child_process execFile (promisified) — async, never sync.
@@ -60,6 +76,7 @@ const defaultRunner: Runner = async (bin, args, { timeoutMs }) => {
 };
 
 const DEFAULT_LIST_TIMEOUT_MS = 30_000;
+const DEFAULT_SWITCH_TIMEOUT_MS = 30_000;
 
 export class Cswap {
   private readonly bin: string;
@@ -147,5 +164,75 @@ export class Cswap {
     }
 
     return { ok: true };
+  }
+
+  private parseSwitchResult(
+    argv: string[],
+    result: Awaited<ReturnType<Runner>>,
+  ): CswapSwitchResult {
+    const argStr = `cswap ${argv.join(" ")}`;
+
+    if (result.timedOut) {
+      throw new Error(`${argStr} timed out`);
+    }
+
+    if (result.code !== 0) {
+      throw new Error(`${argStr} exited with code ${result.code}: ${result.stderr}`);
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(result.stdout);
+    } catch {
+      throw new Error(`${argStr} returned non-JSON: ${result.stdout}`);
+    }
+
+    if (typeof parsed !== "object" || parsed === null) {
+      throw new Error(`${argStr} returned invalid JSON (not an object)`);
+    }
+
+    const obj = parsed as Record<string, unknown>;
+
+    // Documented structured error envelope: {schemaVersion, error: {type, message}}
+    if (typeof obj["error"] === "object" && obj["error"] !== null) {
+      const err = obj["error"] as Record<string, unknown>;
+      throw new Error(`cswap error: ${String(err["type"])}: ${String(err["message"])}`);
+    }
+    // Defensive: plain string error (mirrors list() discipline)
+    if (typeof obj["error"] === "string") {
+      throw new Error(`cswap error: ${obj["error"]}`);
+    }
+
+    if (obj["schemaVersion"] !== 1) {
+      throw new Error(`unsupported cswap schema version: ${String(obj["schemaVersion"])}`);
+    }
+
+    return obj as unknown as CswapSwitchResult;
+  }
+
+  /**
+   * `cswap --switch [--strategy <strategy>] --json`.
+   * Rotate to the next account, or pick by remaining quota with a strategy.
+   */
+  async switch(
+    strategy?: "best" | "next-available",
+    timeoutMs = DEFAULT_SWITCH_TIMEOUT_MS,
+  ): Promise<CswapSwitchResult> {
+    const argv = ["--switch", ...(strategy ? ["--strategy", strategy] : []), "--json"];
+    const result = await this.runner(this.bin, argv, { timeoutMs });
+    return this.parseSwitchResult(argv, result);
+  }
+
+  /**
+   * `cswap --switch-to <target> --json`.
+   * Switch to a specific account by number or email.
+   */
+  async switchTo(
+    target: number | string,
+    timeoutMs = DEFAULT_SWITCH_TIMEOUT_MS,
+  ): Promise<CswapSwitchResult> {
+    const argv = ["--switch-to", String(target), "--json"];
+    const result = await this.runner(this.bin, argv, { timeoutMs });
+    return this.parseSwitchResult(argv, result);
   }
 }
