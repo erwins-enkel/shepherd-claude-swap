@@ -1,0 +1,26 @@
+{
+  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
+  "entry": ["index.ts"],
+  "ignoreExports": [
+    {
+      // types.ts is vendored from Shepherd core (do not edit by hand).
+      // PLUGIN_API_VERSION, PluginRegister, PluginInfo are consumed by Shepherd's
+      // plugin loader (external process) — not imported in-repo.
+      "file": "types.ts",
+      "exports": ["PLUGIN_API_VERSION", "PluginRegister", "PluginInfo"]
+    }
+  ],
+  "duplicates": {
+    // Hide pair-only clones; focus on widespread copy-paste
+    // worth refactoring. Lower to 2 to report every duplicate pair.
+    "minOccurrences": 3
+    // Common additions (uncomment to enable):
+    // "ignore": [
+    //   "**/lib/**",          // for repos that publish transpiled output to lib/
+    //   "**/legacy/**",       // for repos with legacy-build artifacts
+    //   "**/__generated__/**", // Relay, GraphQL Code Generator
+    //   "**/generated/**"     // OpenAPI, Protobuf codegen
+    // ]
+  },
+  "rules": {}
+}

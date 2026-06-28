@@ -1,0 +1,12 @@
+version: 2
+updates:
+  # "npm" ecosystem also drives Bun: Dependabot updates the text-based bun.lock (GA since
+  # Feb 2025). This repo is single-package (no workspaces), avoiding known bun-workspace bugs.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

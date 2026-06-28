@@ -8,3 +8,4 @@ build/
 
 # subagent-driven-development scratch (ledger + review diffs)
 .superpowers/
+.fallow/
