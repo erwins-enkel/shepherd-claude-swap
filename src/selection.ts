@@ -76,9 +76,9 @@ export function assign(
   // -------------------------------------------------------------------------
   // New session path — pick over eligible (two-tier: known first, unavailable as last resort)
   // -------------------------------------------------------------------------
-  const ready_usable = pool.filter((a) => a.usable && !a.rateLimited && ready.has(a.number));
-  const known = ready_usable.filter((a) => !a.usageUnavailable);
-  const fallback = ready_usable.filter((a) => a.usageUnavailable);
+  const readyUsable = pool.filter((a) => a.usable && !a.rateLimited && ready.has(a.number));
+  const known = readyUsable.filter((a) => !a.usageUnavailable);
+  const fallback = readyUsable.filter((a) => a.usageUnavailable);
   const eligible = known.length > 0 ? known : fallback;
 
   if (eligible.length === 0) {

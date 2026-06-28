@@ -297,7 +297,9 @@ describe("buildUIView — empty pool", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildUIView — quota-unknown account", () => {
-  const unknownPool = [makeAccount(10, { usageUnavailable: true })];
+  const unknownPool = [
+    makeAccount(10, { usageUnavailable: true, fiveHourPct: null, sevenDayPct: null }),
+  ];
 
   it("badge label is 'quota unknown'", () => {
     const v = buildUIView(cfg, unknownPool, new Set(), baseState, null, null);
