@@ -1,8 +1,9 @@
 version: 2
 updates:
-  # "npm" ecosystem also drives Bun: Dependabot updates the text-based bun.lock (GA since
-  # Feb 2025). This repo is single-package (no workspaces), avoiding known bun-workspace bugs.
-  - package-ecosystem: "npm"
+  # Native "bun" ecosystem: Dependabot resolves against Bun and updates the text-based
+  # bun.lock (GA since Feb 2025). The "npm" ecosystem left bun.lock stale on stacked PRs,
+  # breaking `bun install --frozen-lockfile` in CI.
+  - package-ecosystem: "bun"
     directory: "/"
     schedule:
       interval: "weekly"
