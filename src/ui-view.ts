@@ -5,6 +5,12 @@ import type { SelectionState } from "./selection";
 import type { LastSpawn } from "./status";
 import { History, downsample, CHART_WINDOW, MAX_DETAILED_ACCOUNTS } from "./history";
 
+/** Neutral identity chip so every account row names its account even on a host that does not
+ *  render plain `text` nodes (the bug this addresses: bars/rows with no account attribution). */
+function identityBadge(number: number, email: string): PluginUINode {
+  return { type: "badge", props: { label: `#${number} ${email}`, tone: "neutral" } };
+}
+
 /** Build a `settings-panel` PluginUIView with the same data as buildStatus. */
 export function buildUIView(
   cfg: ResolvedConfig,
@@ -70,7 +76,7 @@ export function buildUIView(
             {
               type: "meter",
               props: {
-                label: "5h",
+                label: `#${acct.number} · 5h`,
                 value: fivePct,
                 max: 100,
                 caption: fiveCaption,
@@ -80,7 +86,7 @@ export function buildUIView(
             {
               type: "meter",
               props: {
-                label: "7d",
+                label: `#${acct.number} · 7d`,
                 value: sevenPct,
                 max: 100,
                 caption: sevenCaption,
@@ -96,10 +102,7 @@ export function buildUIView(
           {
             type: "stack",
             props: { direction: "horizontal" },
-            children: [
-              { type: "text", props: { content: `#${acct.number} ${acct.email}` } },
-              badge,
-            ],
+            children: [identityBadge(acct.number, acct.email), badge],
           },
           ...meterOrUnknown,
         ],
@@ -175,7 +178,7 @@ export function buildUIView(
         type: "stack",
         props: { direction: "vertical" },
         children: [
-          { type: "text", props: { content: `#${a.number} ${a.email}` } },
+          identityBadge(a.number, a.email),
           {
             type: "text",
             props: { content: "quota unknown — deprioritized; re-checked next refresh" },
@@ -189,11 +192,11 @@ export function buildUIView(
         type: "stack",
         props: { direction: "vertical" },
         children: [
-          { type: "text", props: { content: `#${a.number} ${a.email}` } },
+          identityBadge(a.number, a.email),
           {
             type: "gauge",
             props: {
-              label: "5h",
+              label: `#${a.number} · 5h`,
               value: fp,
               max: 100,
               tone: toneFor(fp),
@@ -203,7 +206,7 @@ export function buildUIView(
           {
             type: "gauge",
             props: {
-              label: "7d",
+              label: `#${a.number} · 7d`,
               value: sp,
               max: 100,
               tone: toneFor(sp),
@@ -212,7 +215,11 @@ export function buildUIView(
           },
           {
             type: "sparkline",
-            props: { label: "5h trend", points: quotaPointsFor(a), tone: toneFor(fp) },
+            props: {
+              label: `#${a.number} · 5h trend`,
+              points: quotaPointsFor(a),
+              tone: toneFor(fp),
+            },
           },
         ],
       });

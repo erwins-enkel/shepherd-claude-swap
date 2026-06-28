@@ -144,17 +144,20 @@ describe("buildUIView — badge tones", () => {
     const unusablePool = [makeAccount(4, { usable: false, reason: "api_key" })];
     const v = buildUIView(cfg, unusablePool, new Set(), baseState, null, null);
     const badges = findByType(v.root, "badge");
-    const neutralBadge = badges.find((b) => b.props?.["tone"] === "neutral");
-    expect(neutralBadge).toBeTruthy();
-    expect(neutralBadge?.props?.["label"]).toBe("api_key");
+    // Identity badges are also neutral, so locate the status badge by its label.
+    const statusBadge = badges.find((b) => b.props?.["label"] === "api_key");
+    expect(statusBadge).toBeTruthy();
+    expect(statusBadge?.props?.["tone"]).toBe("neutral");
   });
 
   it("unusable account with null reason falls back to 'unusable'", () => {
     const unusablePool = [makeAccount(5, { usable: false, reason: null })];
     const v = buildUIView(cfg, unusablePool, new Set(), baseState, null, null);
     const badges = findByType(v.root, "badge");
-    const neutralBadge = badges.find((b) => b.props?.["tone"] === "neutral");
-    expect(neutralBadge?.props?.["label"]).toBe("unusable");
+    // Identity badges are also neutral, so locate the status badge by its label.
+    const statusBadge = badges.find((b) => b.props?.["label"] === "unusable");
+    expect(statusBadge).toBeTruthy();
+    expect(statusBadge?.props?.["tone"]).toBe("neutral");
   });
 });
 
@@ -561,16 +564,58 @@ describe("buildUIView — bar-chart load counts", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildUIView — overflow cap at MAX_DETAILED_ACCOUNTS", () => {
-  it("20-account pool: 16 badges, 16 sparklines, and exactly one '+4 more accounts' text", () => {
+  it("20-account pool: 48 badges, 16 sparklines, and exactly one '+4 more accounts' text", () => {
     const bigPool = Array.from({ length: 20 }, (_, i) => makeAccount(i + 1));
     const v = buildUIView(cfg, bigPool, new Set(), { cursor: 0, assignments: {} }, null, null);
     const badges = findByType(v.root, "badge");
-    expect(badges.length).toBe(16);
+    // 16 detailed accounts × (flat identity + flat status + graphical identity) = 48.
+    expect(badges.length).toBe(48);
     const sparklines = findByType(v.root, "sparkline");
     expect(sparklines.length).toBe(16);
     const texts = findByType(v.root, "text");
     const overflowTexts = texts.filter((t) => t.props?.["content"] === "+4 more accounts");
     expect(overflowTexts.length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Account identity badges + on-bar label prefix
+// ---------------------------------------------------------------------------
+
+describe("buildUIView — account identity attribution", () => {
+  const emptyState: SelectionState = { cursor: 0, assignments: {} };
+
+  it("normal account: neutral identity badge emitted in both flat and graphical sections", () => {
+    const v = buildUIView(cfg, [makeAccount(1)], new Set([1]), emptyState, null, null);
+    const idBadges = findByType(v.root, "badge").filter(
+      (b) => b.props?.["label"] === "#1 acct1@example.com",
+    );
+    expect(idBadges.length).toBe(2); // flat Pool header + graphical normal header
+    for (const b of idBadges) expect(b.props?.["tone"]).toBe("neutral");
+  });
+
+  it("quota-unknown account: identity badge in BOTH sections (covers the graphical usageUnavailable branch)", () => {
+    const unknownPool = [
+      makeAccount(10, { usageUnavailable: true, fiveHourPct: null, sevenDayPct: null }),
+    ];
+    const v = buildUIView(cfg, unknownPool, new Set(), emptyState, null, null);
+    const idBadges = findByType(v.root, "badge").filter(
+      (b) => b.props?.["label"] === "#10 acct10@example.com",
+    );
+    // One from the flat Pool header, one from the graphical quota-unknown branch (line 178).
+    // A missed conversion in that branch would drop this to 1.
+    expect(idBadges.length).toBe(2);
+    // Quota-unknown rows carry no bars, so the identity badge is the only attribution.
+    expect(findByType(v.root, "meter").length).toBe(0);
+    expect(findByType(v.root, "gauge").length).toBe(0);
+  });
+
+  it("normal account: meter and gauge labels are prefixed with the account number", () => {
+    const v = buildUIView(cfg, [makeAccount(1)], new Set([1]), emptyState, null, null);
+    const meter = findByType(v.root, "meter").find((m) => m.props?.["label"] === "#1 · 5h");
+    expect(meter).toBeTruthy();
+    const gauge = findByType(v.root, "gauge").find((g) => g.props?.["label"] === "#1 · 5h");
+    expect(gauge).toBeTruthy();
   });
 });
 
