@@ -3,6 +3,7 @@ import type { ResolvedConfig } from "./config";
 import type { PoolAccount } from "./accounts";
 import type { SelectionState } from "./selection";
 import type { LastSpawn } from "./status";
+import type { HealRecord, HealRestoreFailure } from "./prewarm";
 import { History, downsample, CHART_WINDOW, MAX_DETAILED_ACCOUNTS } from "./history";
 
 /** Neutral identity chip so every account row names its account even on a host that does not
@@ -197,6 +198,58 @@ function buildGraphicsAccountNode(
   };
 }
 
+/** Nodes for the "Last spawn" key-value or placeholder text. */
+function buildLastSpawnNodes(lastSpawn: LastSpawn | null): PluginUINode[] {
+  if (lastSpawn !== null) {
+    return [
+      {
+        type: "key-value",
+        props: {
+          pairs: [
+            { key: "session", value: lastSpawn.sessionId },
+            { key: "account", value: `#${lastSpawn.accountNumber}` },
+            { key: "at", value: lastSpawn.at },
+          ],
+        },
+      },
+    ];
+  }
+  return [{ type: "text", props: { content: "No spawns yet" } }];
+}
+
+/** Nodes for the "Last heal" section: bold header + key-value or placeholder. */
+function buildLastHealNodes(lastHeal: HealRecord | null): PluginUINode[] {
+  const result: PluginUINode[] = [
+    { type: "text", props: { content: "Last heal", weight: "bold" } },
+  ];
+  if (lastHeal !== null) {
+    result.push({
+      type: "key-value",
+      props: {
+        pairs: [
+          { key: "target", value: `#${lastHeal.target}` },
+          { key: "outcome", value: lastHeal.outcome },
+          { key: "at", value: lastHeal.at },
+        ],
+      },
+    });
+  } else {
+    result.push({ type: "text", props: { content: "No heals yet" } });
+  }
+  return result;
+}
+
+/** Error callout shown when the heal dance left the primary on the wrong account. */
+function buildRestoreFailureCallout(rf: HealRestoreFailure): PluginUINode {
+  return {
+    type: "callout",
+    props: {
+      tone: "error",
+      text: `Primary may be on the wrong account — auto-heal could not restore #${rf.intendedActive} (landed ${rf.landedActive ?? "unknown"}). Switch primary back manually.`,
+    },
+  };
+}
+
 /** Build a `settings-panel` PluginUIView with the same data as buildStatus. */
 export function buildUIView(
   cfg: ResolvedConfig,
@@ -206,6 +259,8 @@ export function buildUIView(
   lastSpawn: LastSpawn | null,
   lastError: string | null,
   history: History = new History(),
+  lastHeal: HealRecord | null = null,
+  restoreFailure: HealRestoreFailure | null = null,
 ): PluginUIView {
   const nodes: PluginUINode[] = [];
 
@@ -219,6 +274,7 @@ export function buildUIView(
         { key: "refreshIntervalMs", value: String(cfg.refreshIntervalMs) },
         { key: "abortOnEmpty", value: String(cfg.abortOnEmpty) },
         { key: "makePrimaryButtons", value: String(cfg.makePrimaryButtons) },
+        { key: "autoHeal", value: String(cfg.autoHeal) },
       ],
     },
   });
@@ -266,20 +322,10 @@ export function buildUIView(
   }
 
   // ── Last spawn key-value ──────────────────────────────────────────────────
-  if (lastSpawn !== null) {
-    nodes.push({
-      type: "key-value",
-      props: {
-        pairs: [
-          { key: "session", value: lastSpawn.sessionId },
-          { key: "account", value: `#${lastSpawn.accountNumber}` },
-          { key: "at", value: lastSpawn.at },
-        ],
-      },
-    });
-  } else {
-    nodes.push({ type: "text", props: { content: "No spawns yet" } });
-  }
+  nodes.push(...buildLastSpawnNodes(lastSpawn));
+
+  // ── Last heal ─────────────────────────────────────────────────────────────
+  nodes.push(...buildLastHealNodes(lastHeal));
 
   // ── Graphical section ─────────────────────────────────────────────────────
   const detailed = pool.slice(0, MAX_DETAILED_ACCOUNTS);
@@ -342,7 +388,8 @@ export function buildUIView(
     },
   });
 
-  // ── Error callout ─────────────────────────────────────────────────────────
+  // ── Error callouts ────────────────────────────────────────────────────────
+  if (restoreFailure !== null) nodes.push(buildRestoreFailureCallout(restoreFailure));
   if (lastError !== null) {
     nodes.push({ type: "callout", props: { tone: "error", text: lastError } });
   }

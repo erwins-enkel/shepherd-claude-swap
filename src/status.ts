@@ -1,6 +1,7 @@
 import type { ResolvedConfig } from "./config";
 import type { PoolAccount } from "./accounts";
 import type { SelectionState } from "./selection";
+import type { HealRecord, HealRestoreFailure } from "./prewarm";
 
 export interface LastSpawn {
   sessionId: string;
@@ -22,6 +23,8 @@ export function buildStatus(
   state: SelectionState,
   lastSpawn: LastSpawn | null,
   lastError: string | null,
+  lastHeal: HealRecord | null,
+  restoreFailure: HealRestoreFailure | null,
 ): Record<string, unknown> {
   return {
     config: {
@@ -34,6 +37,8 @@ export function buildStatus(
       refreshIntervalMs: cfg.refreshIntervalMs,
       bootWarmTimeoutMs: cfg.bootWarmTimeoutMs,
       abortOnEmpty: cfg.abortOnEmpty,
+      autoHeal: cfg.autoHeal,
+      autoHealAfterCycles: cfg.autoHealAfterCycles,
     },
     pool: pool.map((acct) => ({
       number: acct.number,
@@ -53,5 +58,7 @@ export function buildStatus(
     cursor: state.cursor,
     lastSpawn: lastSpawn,
     lastError: lastError,
+    lastHeal: lastHeal,
+    restoreFailure: restoreFailure,
   };
 }

@@ -18,6 +18,7 @@ import { assign, type SelectionState } from "./src/selection";
 import { buildStatus, type LastSpawn } from "./src/status";
 import { buildUIView } from "./src/ui-view";
 import { Prewarmer } from "./src/prewarm";
+import type { HealRestoreFailure } from "./src/prewarm";
 
 /** Optional injected dependencies — the testability seam. Shepherd calls `register(ctx)`
  *  (deps undefined → real defaults); tests inject a fake runner/timers/clock. */
@@ -160,6 +161,22 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
   let lastSpawn: LastSpawn | null = null;
   const history = new History();
 
+  // Never let a throwing ctx.state write escape into the heal engine's background loop.
+  const persistRestoreFailure = (info: HealRestoreFailure | null): void => {
+    try {
+      ctx.state.set("healRestoreFailure", info);
+    } catch (err) {
+      ctx.log.warn("failed to persist healRestoreFailure:", String(err));
+    }
+  };
+
+  let initialRestoreFailure: HealRestoreFailure | null = null;
+  try {
+    initialRestoreFailure = ctx.state.get<HealRestoreFailure>("healRestoreFailure") ?? null;
+  } catch {
+    // Malformed state — default to null; don't break register.
+  }
+
   const prewarmer = new Prewarmer({
     cswap,
     cfg,
@@ -167,11 +184,24 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
     backupRoot,
     onChange: () => publish(),
     existsSync: deps?.existsSync,
+    now,
+    onRestoreFailure: (info) => persistRestoreFailure(info),
+    onRestoreRecovered: () => persistRestoreFailure(null),
+    initialRestoreFailure,
   });
 
   const publish = (): void => {
     ctx.publishStatus(
-      buildStatus(cfg, prewarmer.pool, prewarmer.ready, state, lastSpawn, prewarmer.lastError),
+      buildStatus(
+        cfg,
+        prewarmer.pool,
+        prewarmer.ready,
+        state,
+        lastSpawn,
+        prewarmer.lastError,
+        prewarmer.lastHeal,
+        prewarmer.restoreFailure,
+      ),
     );
     if (typeof ctx.publishUI === "function") {
       ctx.publishUI(
@@ -183,6 +213,8 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
           lastSpawn,
           prewarmer.lastError,
           history,
+          prewarmer.lastHeal,
+          prewarmer.restoreFailure,
         ),
       );
     }
@@ -197,6 +229,7 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
   const tick = async (): Promise<void> => {
     if (prewarmer.isSwitching) return; // don't race an in-flight operator switch
     await prewarmer.refresh();
+    await prewarmer.healUnavailable();
     prewarmer.warmStale();
     history.recordQuota(prewarmer.pool);
     publish();
@@ -270,7 +303,16 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
   // ── Routes (under /api/plugins/claude-swap/…).
   ctx.route("GET", "stats", () =>
     Response.json(
-      buildStatus(cfg, prewarmer.pool, prewarmer.ready, state, lastSpawn, prewarmer.lastError),
+      buildStatus(
+        cfg,
+        prewarmer.pool,
+        prewarmer.ready,
+        state,
+        lastSpawn,
+        prewarmer.lastError,
+        prewarmer.lastHeal,
+        prewarmer.restoreFailure,
+      ),
     ),
   );
   ctx.route("POST", "reset", () => {
