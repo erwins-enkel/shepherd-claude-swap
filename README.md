@@ -22,15 +22,21 @@ These are correctness preconditions — without them the plugin misbehaves silen
    `cswap --add-account`. The plugin consumes accounts; it never adds them. The binary must
    be the one from [realiti4/claude-swap](https://github.com/realiti4/claude-swap) (MIT).
 
-2. **Trusted (non-membrane) spawn profile.** Under a sandbox/membrane profile the injected
-   per-account `credentialDir` is not bound into the jail — `claude` would see an empty dir.
-   Use the trusted (passthrough) spawn profile only. See
+2. **Trusted (non-membrane) spawn profile (normal sessions).** On a host predating
+   shepherd#1217, a sandbox/membrane profile does not bind the injected per-account
+   `credentialDir` into the jail — `claude` would see an empty dir — so run normal sessions under
+   the trusted (passthrough) profile. (shepherd#1217+ _does_ bind a plugin-patched `credentialDir`
+   into the membrane, validate-and-fail-open; that is what enables aux-spawn routing — see
+   _Aux spawns_ — but the trusted profile remains the supported config for normal sessions.) See
    [docs/contracts/step0-verification.md](docs/contracts/step0-verification.md) precondition 1.
 
 3. **Subscription (non-api-key) Shepherd auth mode.** In api-key mode Shepherd injects an
-   `apiKeyHelper` which authenticates via the managed key regardless of the OAuth
-   `CLAUDE_CONFIG_DIR` injected by this plugin — defeating per-account rotation entirely.
-   See [docs/contracts/step0-verification.md](docs/contracts/step0-verification.md) precondition 2.
+   `apiKeyHelper` that authenticates via the managed key regardless of the OAuth
+   `CLAUDE_CONFIG_DIR` this plugin injects, so per-account _quota_ rotation is a no-op (the managed
+   key bills). This applies to aux-spawn routing too: under shepherd#1217 an api-key reviewer is
+   authenticated without a prompt, but the key still bills, so `routeAuxQuota` distributes no quota
+   in api-key mode (see _Aux spawns_). See
+   [docs/contracts/step0-verification.md](docs/contracts/step0-verification.md) precondition 2.
 
 4. **Linux/WSL host.** `cswap` credential files live under
    `$XDG_DATA_HOME/claude-swap` (default `~/.local/share/claude-swap`). The path scheme is
@@ -63,18 +69,19 @@ Edit `~/.shepherd/plugins/claude-swap/config.json` to override any defaults (see
 
 All fields are optional — the shipped `config.json` sets every default explicitly.
 
-| Field                | Type                            | Default         | Meaning                                                                                                                                                                                                                                                   |
-| -------------------- | ------------------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cswapBin`           | `string`                        | `"cswap"`       | `cswap` binary name or absolute path.                                                                                                                                                                                                                     |
-| `includeSlots`       | `number[] \| null`              | `null`          | Account numbers eligible for the pool. `null` = all accounts.                                                                                                                                                                                             |
-| `excludeSlots`       | `number[]`                      | `[]`            | Account numbers always excluded from the pool.                                                                                                                                                                                                            |
-| `rateLimitPct`       | `number`                        | `100`           | Accounts with a 5-hour or 7-day usage `pct` ≥ this value are treated as rate-limited and skipped for new sessions. Range 0–1000.                                                                                                                          |
-| `strategy`           | `"round-robin" \| "least-used"` | `"round-robin"` | New-session selection strategy. `round-robin` spreads sessions evenly across eligible accounts. `least-used` assigns the eligible account with the most remaining quota (lowest `max(5h, 7d)` usage). Resume always reuses the pinned account regardless. |
-| `prewarmArgs`        | `string[]`                      | `["--version"]` | Args passed after `cswap run <N> --` to bootstrap a session profile. `--version` exits instantly with no quota usage.                                                                                                                                     |
-| `refreshIntervalMs`  | `number`                        | `60000`         | Background `cswap --list` refresh + stale-profile re-warm interval (ms).                                                                                                                                                                                  |
-| `bootWarmTimeoutMs`  | `number`                        | `30000`         | Max time (ms) the plugin waits for ≥1 account to become ready at boot before unblocking HTTP.                                                                                                                                                             |
-| `abortOnEmpty`       | `boolean`                       | `true`          | Refuse spawns (`ctx.abortSpawn`) when no usable account is available — Shepherd then holds and retries a refused create (no task loss) and hard-blocks a non-forced resume. Set `false` to fail-open (not recommended).                                   |
-| `makePrimaryButtons` | `boolean`                       | `true`          | Show a per-account **Make primary** `action-button` in the panel (see _Make primary picker_ below). Requires a host whose `publishUI` renderer includes `action-button` (shepherd#1209/#1210). Set `false` on an older host to fall back to badge-only.   |
+| Field                | Type                            | Default         | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| -------------------- | ------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `cswapBin`           | `string`                        | `"cswap"`       | `cswap` binary name or absolute path.                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `includeSlots`       | `number[] \| null`              | `null`          | Account numbers eligible for the pool. `null` = all accounts.                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `excludeSlots`       | `number[]`                      | `[]`            | Account numbers always excluded from the pool.                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `rateLimitPct`       | `number`                        | `100`           | Accounts with a 5-hour or 7-day usage `pct` ≥ this value are treated as rate-limited and skipped for new sessions. Range 0–1000.                                                                                                                                                                                                                                                                                                                                                                             |
+| `strategy`           | `"round-robin" \| "least-used"` | `"round-robin"` | New-session selection strategy. `round-robin` spreads sessions evenly across eligible accounts. `least-used` assigns the eligible account with the most remaining quota (lowest `max(5h, 7d)` usage). Resume always reuses the pinned account regardless.                                                                                                                                                                                                                                                    |
+| `prewarmArgs`        | `string[]`                      | `["--version"]` | Args passed after `cswap run <N> --` to bootstrap a session profile. `--version` exits instantly with no quota usage.                                                                                                                                                                                                                                                                                                                                                                                        |
+| `refreshIntervalMs`  | `number`                        | `60000`         | Background `cswap --list` refresh + stale-profile re-warm interval (ms).                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `bootWarmTimeoutMs`  | `number`                        | `30000`         | Max time (ms) the plugin waits for ≥1 account to become ready at boot before unblocking HTTP.                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `abortOnEmpty`       | `boolean`                       | `true`          | Refuse spawns (`ctx.abortSpawn`) when no usable account is available — Shepherd then holds and retries a refused create (no task loss) and hard-blocks a non-forced resume. Set `false` to fail-open (not recommended).                                                                                                                                                                                                                                                                                      |
+| `makePrimaryButtons` | `boolean`                       | `true`          | Show a per-account **Make primary** `action-button` in the panel (see _Make primary picker_ below). Requires a host whose `publishUI` renderer includes `action-button` (shepherd#1209/#1210). Set `false` on an older host to fall back to badge-only.                                                                                                                                                                                                                                                      |
+| `routeAuxQuota`      | `boolean`                       | `true`          | Route aux spawns (review / plan-gate / doc) onto a pool account (see _Aux spawns_ below). **Requires a Shepherd release containing shepherd#1217**, which binds the routed `credentialDir` into the reviewer sandbox. ⚠️ #1217 is **not yet in a shipped release** (latest v1.38.0 predates it), so on any host without it you **must** set `false` or routed reviewers run **unauthenticated** (re-login + theme prompt). Default `true` is a deliberate choice; the opt-out is annotated in `config.json`. |
 
 ---
 
@@ -92,19 +99,38 @@ an account, writes the sticky assignment to `ctx.state` (synchronously, before r
 and returns `{ credentialDir: <session-profile-dir> }`. The injected path becomes
 `CLAUDE_CONFIG_DIR` for the spawned agent.
 
-**Aux spawns (review / plan-gate / doc) — shepherd#1205:** When Shepherd fires `onSpawn`
-for a review / plan-gate / doc sub-spawn (`kind !== "session"`), the plugin returns **no
-patch** and **never aborts** — it does not assign an account, touch durable state, or appear
-in the lastSpawn / spawn timeline. These sub-spawns run inside a bwrap sandbox that
-bind-mounts only Shepherd's active `~/.claude`; it does _not_ mount a plugin-supplied
-`credentialDir` (the patched `CLAUDE_CONFIG_DIR` reaches the sandbox as an env var but its
-directory is never bound, so a pool-profile path would resolve to an empty dir → an
-unauthenticated reviewer). Leaving the spawn unpatched keeps it on the sandbox-bound active
-account, which is authenticated. Distributing aux-spawn quota onto a pool account is therefore
-not possible from the plugin alone — it needs a Shepherd-side change to bind the patched
-`credentialDir` into the aux sandbox ([shepherd#1213](https://github.com/erwins-enkel/shepherd/issues/1213)).
-Hosts predating shepherd#1205 (no `kind` field on `SpawnDescriptor`) are treated as normal
-session spawns.
+**Aux spawns (review / plan-gate / doc) — shepherd#1205 / #1217:** When Shepherd fires
+`onSpawn` for a review / plan-gate / doc sub-spawn (`kind !== "session"`), the plugin routes its
+quota onto a pool account — gated by [`routeAuxQuota`](#configuration) (default `true`):
+
+- **`routeAuxQuota: true`** (a host whose reviewer sandbox binds a plugin-patched `credentialDir`
+  — [shepherd#1217](https://github.com/erwins-enkel/shepherd/pull/1217)+): a **review / plan-gate**
+  spawn (has `parentSessionId`) inherits the parent session's pinned account `credentialDir`; a
+  **doc / standalone-critic** spawn (no `parentSessionId`) is routed to a pool account
+  _ephemerally_ — no durable pin, no cursor advance, and it never appears in the lastSpawn / spawn
+  timeline. If the parent is untracked or no pool account is ready, the spawn falls open (`{}`) on
+  the active account. #1217 hard-binds the routed dir, redirects its `projects` bind to the active
+  projects dir (so usage/activity readback keeps working), rw-binds its `.claude.json`, and
+  **validates the dir on host** — a missing dir falls open to the active account rather than
+  crashing.
+- **`routeAuxQuota: false`** (a host _without_ #1217): the plugin returns **no patch**, leaving the
+  spawn on the sandbox-bound active account. Required on such hosts because the sandbox binds only
+  Shepherd's active `~/.claude` — a routed `credentialDir` reaches it as an env var but its
+  directory is never mounted, so it would resolve to an empty dir → an **unauthenticated reviewer**.
+  ⚠️ #1217 is **not yet in a shipped Shepherd release** (latest v1.38.0 predates the merge), so on
+  every currently-deployable host you must set `routeAuxQuota: false` until a #1217-bearing release
+  is installed. The default is `true` as a deliberate, forward-looking choice.
+
+**Auth-mode nuance:** credential routing requires a sandbox backend (bwrap). With a backend it works
+in both modes — _subscription_ uses the pool account's OAuth (distributing real quota), while
+_api-key_ keeps the managed key billing (the reviewer is authenticated without a prompt, but
+`routeAuxQuota` distributes **no** quota — see [precondition 3](#requirements--preconditions)).
+Without a backend, subscription still routes (runs unsandboxed on the host) while api-key safely
+no-ops the routing via its credential-less mirror.
+
+An aux spawn is **never aborted** in either mode (a refused review is terminal — no held retry).
+Hosts predating shepherd#1205 (no `kind` field on `SpawnDescriptor`) are treated as normal session
+spawns.
 
 **Warm/retry resume edge case:** if a resume's pinned account is usable but its profile is
 not yet pre-warmed (e.g. right after a restart), the spawn is aborted with a "retry" message

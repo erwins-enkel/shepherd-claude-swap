@@ -119,23 +119,33 @@ describe("Prewarmer.lastError", () => {
 // Fix 4 — warm-time profile-dir existence guard (PRD §9)
 // ───────────────────────────────────────────────────────────────────────────
 
-describe("Prewarmer.warm — profile-dir existence guard", () => {
-  it("prewarm ok but derived dir absent → account NOT added to ready", async () => {
+describe("Prewarmer.warm — profile credentials guard", () => {
+  it("prewarm ok but .credentials.json absent → account NOT added to ready", async () => {
     const { prewarmer, warnings } = makePrewarmer({ existsSync: () => false });
     await prewarmer.refresh(); // populate pool from fixture (account 1 usable)
     await prewarmer.warm(1);
     expect(prewarmer.ready.has(1)).toBe(false);
-    expect(warnings.some((w) => w.includes("profile dir is absent"))).toBe(true);
+    expect(warnings.some((w) => w.includes("credentials are absent"))).toBe(true);
   });
 
-  it("prewarm ok and derived dir present → account added to ready", async () => {
+  it("prewarm ok and .credentials.json present → account added to ready", async () => {
     const { prewarmer } = makePrewarmer({ existsSync: () => true });
     await prewarmer.refresh();
     await prewarmer.warm(1);
     expect(prewarmer.ready.has(1)).toBe(true);
   });
 
-  it("checks the dir derived from backupRoot + account email", async () => {
+  it("dir present but .credentials.json missing → NOT added to ready", async () => {
+    // existsSync true for the dir, false for the credentials file → credential-incomplete profile.
+    const { prewarmer } = makePrewarmer({
+      existsSync: (p) => !p.endsWith(".credentials.json"),
+    });
+    await prewarmer.refresh();
+    await prewarmer.warm(1);
+    expect(prewarmer.ready.has(1)).toBe(false);
+  });
+
+  it("checks <profile-dir>/.credentials.json derived from backupRoot + account email", async () => {
     const checked: string[] = [];
     const { prewarmer } = makePrewarmer({
       backupRoot: "/custom/root",
@@ -147,7 +157,7 @@ describe("Prewarmer.warm — profile-dir existence guard", () => {
     await prewarmer.refresh();
     await prewarmer.warm(1);
     // fixture account 1 email = acct1@example.com → slug acct1_example.com
-    expect(checked).toContain("/custom/root/sessions/1-acct1_example.com");
+    expect(checked).toContain("/custom/root/sessions/1-acct1_example.com/.credentials.json");
   });
 });
 

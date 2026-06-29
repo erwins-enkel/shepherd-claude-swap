@@ -1,4 +1,5 @@
 import { existsSync as fsExistsSync } from "node:fs";
+import path from "node:path";
 import type { PluginLogger } from "../types";
 import type { ResolvedConfig } from "./config";
 import type { Cswap } from "./cswap";
@@ -102,8 +103,13 @@ export class Prewarmer {
         this.log.warn(`prewarm of account ${accountNumber} failed: ${res.error ?? "unknown"}`);
         return;
       }
-      // Warm-time guard (PRD §9): only mark ready if the resolved profile dir actually
-      // exists, so `onSpawn` never injects a non-existent credentialDir. Off the hot path.
+      // Warm-time guard (PRD §9): only mark ready if the resolved profile dir holds materialized
+      // OAuth credentials (`.credentials.json`), so `onSpawn` never injects a credential-incomplete
+      // credentialDir — under shepherd#1217 the routed dir is hard-bound into the reviewer sandbox,
+      // so a dir present but missing `.credentials.json` would yield an UNAUTHENTICATED reviewer.
+      // No warm→check race: `cswap run` (the prewarm) writes `.credentials.json` synchronously in
+      // setup_session BEFORE exec'ing the inner command, so an exit-0 prewarm means the file is
+      // already on disk. Off the hot path.
       const acct = this.pool.find((a) => a.number === accountNumber);
       if (acct === undefined) {
         this.log.warn(
@@ -112,12 +118,13 @@ export class Prewarmer {
         return;
       }
       const dir = sessionProfileDir(this.backupRoot, accountNumber, acct.email);
-      if (this.existsSync(dir)) {
+      const credsPath = path.join(dir, ".credentials.json");
+      if (this.existsSync(credsPath)) {
         if (this.switching) return; // suppressed during an operator switch — do NOT mark ready
         this.ready.add(accountNumber);
       } else {
         this.log.warn(
-          `prewarm of account ${accountNumber} ok but profile dir is absent (${dir}); not marking ready`,
+          `prewarm of account ${accountNumber} ok but credentials are absent (${credsPath}); not marking ready`,
         );
       }
     })().finally(() => {

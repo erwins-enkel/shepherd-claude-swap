@@ -11,6 +11,7 @@ export interface ResolvedConfig {
   bootWarmTimeoutMs: number;
   abortOnEmpty: boolean;
   makePrimaryButtons: boolean;
+  routeAuxQuota: boolean;
 }
 
 function requireFiniteInt(val: unknown, name: string): number {
@@ -123,6 +124,17 @@ export function parseConfig(raw: Record<string, unknown>): ResolvedConfig {
     );
   }
 
+  // routeAuxQuota — gate aux-spawn (review / plan-gate / doc) credential routing onto a pool
+  // account. Default true assumes a host whose reviewer sandbox binds a plugin-patched
+  // credentialDir (shepherd#1217+); on an older host the routed dir is never mounted, so the
+  // reviewer would start UNAUTHENTICATED — set false there to fall back to pass-through (the
+  // active account). DELIBERATE default-true override: #1217 is not yet in a shipped Shepherd
+  // release, so operators on a pre-#1217 host MUST set this false (see README + config.json).
+  const routeAuxQuota = "routeAuxQuota" in raw ? raw["routeAuxQuota"] : true;
+  if (typeof routeAuxQuota !== "boolean") {
+    throw new Error(`routeAuxQuota: expected boolean, got ${JSON.stringify(routeAuxQuota)}`);
+  }
+
   return {
     cswapBin,
     includeSlots,
@@ -134,5 +146,6 @@ export function parseConfig(raw: Record<string, unknown>): ResolvedConfig {
     bootWarmTimeoutMs,
     abortOnEmpty,
     makePrimaryButtons,
+    routeAuxQuota,
   };
 }
