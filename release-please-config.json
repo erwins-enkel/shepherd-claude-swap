@@ -1,0 +1,11 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bump-minor-pre-major": true,
+  "last-release-sha": "23f0dc9e150382e9e80a7c908c49ff1a19104062",
+  "packages": {
+    ".": {
+      "release-type": "node",
+      "extra-files": [{ "type": "json", "path": "plugin.json", "jsonpath": "$.version" }]
+    }
+  }
+}
