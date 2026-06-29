@@ -63,17 +63,18 @@ Edit `~/.shepherd/plugins/claude-swap/config.json` to override any defaults (see
 
 All fields are optional — the shipped `config.json` sets every default explicitly.
 
-| Field               | Type                            | Default         | Meaning                                                                                                                                                                                                                                                   |
-| ------------------- | ------------------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cswapBin`          | `string`                        | `"cswap"`       | `cswap` binary name or absolute path.                                                                                                                                                                                                                     |
-| `includeSlots`      | `number[] \| null`              | `null`          | Account numbers eligible for the pool. `null` = all accounts.                                                                                                                                                                                             |
-| `excludeSlots`      | `number[]`                      | `[]`            | Account numbers always excluded from the pool.                                                                                                                                                                                                            |
-| `rateLimitPct`      | `number`                        | `100`           | Accounts with a 5-hour or 7-day usage `pct` ≥ this value are treated as rate-limited and skipped for new sessions. Range 0–1000.                                                                                                                          |
-| `strategy`          | `"round-robin" \| "least-used"` | `"round-robin"` | New-session selection strategy. `round-robin` spreads sessions evenly across eligible accounts. `least-used` assigns the eligible account with the most remaining quota (lowest `max(5h, 7d)` usage). Resume always reuses the pinned account regardless. |
-| `prewarmArgs`       | `string[]`                      | `["--version"]` | Args passed after `cswap run <N> --` to bootstrap a session profile. `--version` exits instantly with no quota usage.                                                                                                                                     |
-| `refreshIntervalMs` | `number`                        | `60000`         | Background `cswap --list` refresh + stale-profile re-warm interval (ms).                                                                                                                                                                                  |
-| `bootWarmTimeoutMs` | `number`                        | `30000`         | Max time (ms) the plugin waits for ≥1 account to become ready at boot before unblocking HTTP.                                                                                                                                                             |
-| `abortOnEmpty`      | `boolean`                       | `true`          | Refuse spawns (`ctx.abortSpawn`) when no usable account is available — Shepherd then holds and retries a refused create (no task loss) and hard-blocks a non-forced resume. Set `false` to fail-open (not recommended).                                   |
+| Field                | Type                            | Default         | Meaning                                                                                                                                                                                                                                                   |
+| -------------------- | ------------------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cswapBin`           | `string`                        | `"cswap"`       | `cswap` binary name or absolute path.                                                                                                                                                                                                                     |
+| `includeSlots`       | `number[] \| null`              | `null`          | Account numbers eligible for the pool. `null` = all accounts.                                                                                                                                                                                             |
+| `excludeSlots`       | `number[]`                      | `[]`            | Account numbers always excluded from the pool.                                                                                                                                                                                                            |
+| `rateLimitPct`       | `number`                        | `100`           | Accounts with a 5-hour or 7-day usage `pct` ≥ this value are treated as rate-limited and skipped for new sessions. Range 0–1000.                                                                                                                          |
+| `strategy`           | `"round-robin" \| "least-used"` | `"round-robin"` | New-session selection strategy. `round-robin` spreads sessions evenly across eligible accounts. `least-used` assigns the eligible account with the most remaining quota (lowest `max(5h, 7d)` usage). Resume always reuses the pinned account regardless. |
+| `prewarmArgs`        | `string[]`                      | `["--version"]` | Args passed after `cswap run <N> --` to bootstrap a session profile. `--version` exits instantly with no quota usage.                                                                                                                                     |
+| `refreshIntervalMs`  | `number`                        | `60000`         | Background `cswap --list` refresh + stale-profile re-warm interval (ms).                                                                                                                                                                                  |
+| `bootWarmTimeoutMs`  | `number`                        | `30000`         | Max time (ms) the plugin waits for ≥1 account to become ready at boot before unblocking HTTP.                                                                                                                                                             |
+| `abortOnEmpty`       | `boolean`                       | `true`          | Refuse spawns (`ctx.abortSpawn`) when no usable account is available — Shepherd then holds and retries a refused create (no task loss) and hard-blocks a non-forced resume. Set `false` to fail-open (not recommended).                                   |
+| `makePrimaryButtons` | `boolean`                       | `true`          | Show a per-account **Make primary** `action-button` in the panel (see _Make primary picker_ below). Requires a host whose `publishUI` renderer includes `action-button` (shepherd#1209/#1210). Set `false` on an older host to fall back to badge-only.   |
 
 ---
 
@@ -119,7 +120,25 @@ operator-triggered global switch is available out of band via `POST switch-prima
 (never called by the hot path).
 
 **Status panel:** Open Settings → Plugins in the Shepherd UI to see per-account 5h/7d quota,
-current session→account assignments, and the last spawn decision in real time. An account whose quota `cswap` cannot currently report shows a **quota unknown** badge instead of a misleading `0%` meter. The active ("primary") account shows a **primary** badge. A per-account "Make primary" picker in the panel is a follow-up gated on a host UI capability — tracked by [shepherd#1209](https://github.com/erwins-enkel/shepherd/issues/1209).
+current session→account assignments, and the last spawn decision in real time. An account whose quota `cswap` cannot currently report shows a **quota unknown** badge instead of a misleading `0%` meter. The active ("primary") account shows a **primary** badge.
+
+**Make primary picker:** each eligible non-primary account row carries a **Make primary** button
+(a `publishUI` `action-button`) that POSTs `{ mode: "specific", account }` to the plugin's own
+`switch-primary` route and re-publishes the panel — switching cswap's primary account without
+leaving Settings. A confirm dialog (_"Make this the primary account?"_) guards the click, since the
+switch is global. A button is shown only for accounts that are a sensible target — **usable and not
+rate-limited**; the active account (it keeps its badge), rate-limited accounts, and unusable
+accounts get none. A **quota-unknown** account is still eligible: unknown quota is a reporting gap,
+not unusability, and you may legitimately want to move the primary onto one. (Only the first few
+accounts get detailed rows; any beyond that fold into the "+N more accounts" line and get no
+button.)
+
+This picker requires a host whose `publishUI` renderer includes the `action-button` node
+([shepherd#1209](https://github.com/erwins-enkel/shepherd/issues/1209) /
+[#1210](https://github.com/erwins-enkel/shepherd/pull/1210)). It is enabled by default
+(`makePrimaryButtons: true`); on an older host that lacks the renderer, set
+`"makePrimaryButtons": false` in `config.json` to fall back to the badge-only view (otherwise those
+rows render as placeholder tiles).
 
 **Gear menu:** On Shepherd ≥ 1.39.0 the plugin also contributes a **Claude swap usage** entry to
 the top-bar gear menu (desktop dropdown + mobile sheet). Clicking it opens Settings → Plugins

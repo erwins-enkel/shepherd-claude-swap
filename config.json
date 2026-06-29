@@ -7,5 +7,6 @@
   "prewarmArgs": ["--version"],
   "refreshIntervalMs": 600000,
   "bootWarmTimeoutMs": 30000,
-  "abortOnEmpty": true
+  "abortOnEmpty": true,
+  "makePrimaryButtons": true
 }

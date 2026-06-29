@@ -45,6 +45,32 @@ function buildStatusBadge(acct: PoolAccount, isReady: boolean): PluginUINode {
   return { type: "badge", props: { label: acct.reason ?? "unusable", tone: "neutral" } };
 }
 
+/** Per-account "Make primary" action-button: POSTs a specific-account switch to the plugin's own
+ *  `switch-primary` route. The bare path is resolved by the host under `/api/plugins/claude-swap/`
+ *  (leading `/` and `..` are rejected host-side). `account` is the slot number — the route's
+ *  specific-by-number fast path drops only the target from `ready`. Confirmed before POST because
+ *  switching the primary is a global, disruptive action. Emitted only for eligible non-primary
+ *  accounts and gated by `cfg.makePrimaryButtons` (see `buildPoolAccountRow`). */
+function makePrimaryButton(acct: PoolAccount): PluginUINode {
+  return {
+    type: "action-button",
+    props: {
+      label: "Make primary",
+      tone: "neutral",
+      route: { method: "POST", path: "switch-primary" },
+      body: { mode: "specific", account: acct.number },
+      confirm: "Make this the primary account?",
+    },
+  };
+}
+
+/** Whether an account is a sensible "Make primary" target: a non-active account that is usable and
+ *  not rate-limited. Quota-unknown (`usageUnavailable`) accounts stay eligible — that is a reporting
+ *  gap, not unusability, and an operator may legitimately move the primary onto one. */
+function canMakePrimary(acct: PoolAccount): boolean {
+  return !acct.active && acct.usable && !acct.rateLimited;
+}
+
 /** Meters (5h + 7d) for an account with known quota, or the quota-unknown note. */
 function buildAccountMeters(acct: PoolAccount, rateLimitPct: number): PluginUINode[] {
   if (acct.usageUnavailable) return [quotaUnknownNote(acct.active)];
@@ -84,12 +110,20 @@ function buildAccountMeters(acct: PoolAccount, rateLimitPct: number): PluginUINo
   ];
 }
 
-/** Build the flat pool row for one account: identity + status badge + meters or unknown note. */
+/** Build the flat pool row for one account: identity + status badge + meters or unknown note.
+ *  When `showMakePrimary` is on (config flag) and the account is an eligible target, the header
+ *  also carries a "Make primary" action-button. */
 function buildPoolAccountRow(
   acct: PoolAccount,
   isReady: boolean,
   rateLimitPct: number,
+  showMakePrimary: boolean,
 ): PluginUINode {
+  const header: PluginUINode[] = [
+    identityBadge(acct.number, acct.email),
+    buildStatusBadge(acct, isReady),
+  ];
+  if (showMakePrimary && canMakePrimary(acct)) header.push(makePrimaryButton(acct));
   return {
     type: "stack",
     props: { direction: "vertical", gap: "sm" },
@@ -97,7 +131,7 @@ function buildPoolAccountRow(
       {
         type: "stack",
         props: { direction: "horizontal" },
-        children: [identityBadge(acct.number, acct.email), buildStatusBadge(acct, isReady)],
+        children: header,
       },
       ...buildAccountMeters(acct, rateLimitPct),
     ],
@@ -184,6 +218,7 @@ export function buildUIView(
         { key: "rateLimitPct", value: `${cfg.rateLimitPct}%` },
         { key: "refreshIntervalMs", value: String(cfg.refreshIntervalMs) },
         { key: "abortOnEmpty", value: String(cfg.abortOnEmpty) },
+        { key: "makePrimaryButtons", value: String(cfg.makePrimaryButtons) },
       ],
     },
   });
@@ -196,7 +231,9 @@ export function buildUIView(
   } else {
     const detailed = pool.slice(0, MAX_DETAILED_ACCOUNTS);
     for (const acct of detailed) {
-      nodes.push(buildPoolAccountRow(acct, ready.has(acct.number), cfg.rateLimitPct));
+      nodes.push(
+        buildPoolAccountRow(acct, ready.has(acct.number), cfg.rateLimitPct, cfg.makePrimaryButtons),
+      );
     }
     if (pool.length > MAX_DETAILED_ACCOUNTS) {
       nodes.push({
