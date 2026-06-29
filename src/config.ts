@@ -10,6 +10,7 @@ export interface ResolvedConfig {
   refreshIntervalMs: number;
   bootWarmTimeoutMs: number;
   abortOnEmpty: boolean;
+  makePrimaryButtons: boolean;
 }
 
 function requireFiniteInt(val: unknown, name: string): number {
@@ -112,6 +113,16 @@ export function parseConfig(raw: Record<string, unknown>): ResolvedConfig {
     throw new Error(`abortOnEmpty: expected boolean, got ${JSON.stringify(abortOnEmpty)}`);
   }
 
+  // makePrimaryButtons — gate per-account "Make primary" action-button emission. Default true
+  // assumes a host whose publishUI renderer includes `action-button` (shepherd #1209/#1210+);
+  // set false on an older host to fall back to the badge-only view (no UnknownNodeTile tiles).
+  const makePrimaryButtons = "makePrimaryButtons" in raw ? raw["makePrimaryButtons"] : true;
+  if (typeof makePrimaryButtons !== "boolean") {
+    throw new Error(
+      `makePrimaryButtons: expected boolean, got ${JSON.stringify(makePrimaryButtons)}`,
+    );
+  }
+
   return {
     cswapBin,
     includeSlots,
@@ -122,5 +133,6 @@ export function parseConfig(raw: Record<string, unknown>): ResolvedConfig {
     refreshIntervalMs,
     bootWarmTimeoutMs,
     abortOnEmpty,
+    makePrimaryButtons,
   };
 }

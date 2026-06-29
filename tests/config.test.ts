@@ -15,6 +15,7 @@ describe("parseConfig", () => {
         refreshIntervalMs: 60000,
         bootWarmTimeoutMs: 30000,
         abortOnEmpty: true,
+        makePrimaryButtons: true,
       } satisfies ResolvedConfig);
     });
   });
@@ -64,6 +65,18 @@ describe("parseConfig", () => {
 
     it("accepts abortOnEmpty: false", () => {
       expect(parseConfig({ abortOnEmpty: false }).abortOnEmpty).toBe(false);
+    });
+
+    it("defaults makePrimaryButtons to true", () => {
+      expect(parseConfig({}).makePrimaryButtons).toBe(true);
+    });
+
+    it("accepts makePrimaryButtons: false", () => {
+      expect(parseConfig({ makePrimaryButtons: false }).makePrimaryButtons).toBe(false);
+    });
+
+    it("accepts makePrimaryButtons: true explicitly", () => {
+      expect(parseConfig({ makePrimaryButtons: true }).makePrimaryButtons).toBe(true);
     });
   });
 
@@ -216,6 +229,20 @@ describe("parseConfig", () => {
 
     it("throws if abortOnEmpty is null", () => {
       expect(() => parseConfig({ abortOnEmpty: null })).toThrow();
+    });
+  });
+
+  describe("validation — makePrimaryButtons", () => {
+    it("throws if makePrimaryButtons is a string", () => {
+      expect(() => parseConfig({ makePrimaryButtons: "true" })).toThrow();
+    });
+
+    it("throws if makePrimaryButtons is a number", () => {
+      expect(() => parseConfig({ makePrimaryButtons: 1 })).toThrow();
+    });
+
+    it("throws if makePrimaryButtons is null", () => {
+      expect(() => parseConfig({ makePrimaryButtons: null })).toThrow();
     });
   });
 });

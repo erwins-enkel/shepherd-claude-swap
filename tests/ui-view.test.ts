@@ -829,3 +829,81 @@ describe("buildUIView — empty history", () => {
     expect(findByType(v.root, "bar-chart").length).toBeGreaterThan(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// "Make primary" action-button picker (issue #21)
+// ---------------------------------------------------------------------------
+
+const cfgButtonsOff = parseConfig({ makePrimaryButtons: false });
+
+// Mixed pool exercising every eligibility branch.
+const pickerPool: PoolAccount[] = [
+  makeAccount(1, { active: true }), // active/primary — never gets a button
+  makeAccount(2, { active: false, fiveHourPct: 40, sevenDayPct: 50 }), // eligible (usable, ready)
+  makeAccount(3, { active: false, rateLimited: true, fiveHourPct: 95, sevenDayPct: 99 }), // rate-limited
+  makeAccount(4, { active: false, usable: false, reason: "no_credentials" }), // unusable
+  makeAccount(5, {
+    active: false,
+    fiveHourPct: null,
+    sevenDayPct: null,
+    usageUnavailable: true,
+  }), // quota-unknown but usable — INTENTIONALLY eligible
+];
+const pickerReady = new Set([2]);
+
+describe("buildUIView — Make primary picker", () => {
+  it("emits an action-button only for eligible non-primary accounts (usable, not rate-limited)", () => {
+    const v = buildUIView(cfg, pickerPool, pickerReady, baseState, null, null);
+    const buttons = findByType(v.root, "action-button");
+    const accounts = buttons.map((b) => (b.props?.["body"] as { account: number }).account).sort();
+    // #2 (ready) and #5 (quota-unknown but usable) are eligible; #1 active, #3 rate-limited, #4 unusable.
+    expect(accounts).toEqual([2, 5]);
+  });
+
+  it("a quota-unknown but usable account is eligible (reporting gap, not unusability)", () => {
+    const v = buildUIView(cfg, pickerPool, pickerReady, baseState, null, null);
+    const accounts = findByType(v.root, "action-button").map(
+      (b) => (b.props?.["body"] as { account: number }).account,
+    );
+    expect(accounts).toContain(5);
+  });
+
+  it("never emits a button for the active (primary), rate-limited, or unusable account", () => {
+    const v = buildUIView(cfg, pickerPool, pickerReady, baseState, null, null);
+    const accounts = findByType(v.root, "action-button").map(
+      (b) => (b.props?.["body"] as { account: number }).account,
+    );
+    expect(accounts).not.toContain(1);
+    expect(accounts).not.toContain(3);
+    expect(accounts).not.toContain(4);
+  });
+
+  it("button carries the correct shape: POST switch-primary, specific mode, confirm, neutral tone", () => {
+    const v = buildUIView(cfg, pickerPool, pickerReady, baseState, null, null);
+    const button = findByType(v.root, "action-button").find(
+      (b) => (b.props?.["body"] as { account: number }).account === 2,
+    );
+    expect(button).toBeDefined();
+    expect(button?.props).toMatchObject({
+      label: "Make primary",
+      tone: "neutral",
+      route: { method: "POST", path: "switch-primary" },
+      body: { mode: "specific", account: 2 },
+      confirm: "Make this the primary account?",
+    });
+  });
+
+  it("uses a bare route path (no leading slash, host-resolved under the plugin namespace)", () => {
+    const v = buildUIView(cfg, pickerPool, pickerReady, baseState, null, null);
+    for (const b of findByType(v.root, "action-button")) {
+      const path = (b.props?.["route"] as { path: string }).path;
+      expect(path.startsWith("/")).toBe(false);
+      expect(path).toBe("switch-primary");
+    }
+  });
+
+  it("emits no action-button anywhere when makePrimaryButtons is false (pre-#1209 escape hatch)", () => {
+    const v = buildUIView(cfgButtonsOff, pickerPool, pickerReady, baseState, null, null);
+    expect(findByType(v.root, "action-button").length).toBe(0);
+  });
+});
