@@ -92,13 +92,18 @@ and returns `{ credentialDir: <session-profile-dir> }`. The injected path become
 `CLAUDE_CONFIG_DIR` for the spawned agent.
 
 **Aux spawns (review / plan-gate / doc) — shepherd#1205:** When Shepherd fires `onSpawn`
-for a review or plan-gate sub-spawn, the plugin reuses the parent session's pinned account
-(same `credentialDir`, no new assignment, no abort). When Shepherd fires `onSpawn` for a
-session-less doc/critic spawn (no `parentSessionId`), the plugin routes it to a pool account
-ephemerally — the assignment is not stored, not shown in the lastSpawn or spawn timeline.
-If no pool account is ready for a session-less aux spawn, or if the parent session is
-untracked, the spawn falls open (`{}`); **aux spawns are never aborted**. Hosts predating
-shepherd#1205 (no `kind` field on `SpawnDescriptor`) are treated as normal session spawns.
+for a review / plan-gate / doc sub-spawn (`kind !== "session"`), the plugin returns **no
+patch** and **never aborts** — it does not assign an account, touch durable state, or appear
+in the lastSpawn / spawn timeline. These sub-spawns run inside a bwrap sandbox that
+bind-mounts only Shepherd's active `~/.claude`; it does _not_ mount a plugin-supplied
+`credentialDir` (the patched `CLAUDE_CONFIG_DIR` reaches the sandbox as an env var but its
+directory is never bound, so a pool-profile path would resolve to an empty dir → an
+unauthenticated reviewer). Leaving the spawn unpatched keeps it on the sandbox-bound active
+account, which is authenticated. Distributing aux-spawn quota onto a pool account is therefore
+not possible from the plugin alone — it needs a Shepherd-side change to bind the patched
+`credentialDir` into the aux sandbox ([shepherd#1213](https://github.com/erwins-enkel/shepherd/issues/1213)).
+Hosts predating shepherd#1205 (no `kind` field on `SpawnDescriptor`) are treated as normal
+session spawns.
 
 **Warm/retry resume edge case:** if a resume's pinned account is usable but its profile is
 not yet pre-warmed (e.g. right after a restart), the spawn is aborted with a "retry" message
