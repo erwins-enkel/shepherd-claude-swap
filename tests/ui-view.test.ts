@@ -927,7 +927,7 @@ describe("buildUIView — heal integration", () => {
     landedActive: 2,
   };
 
-  it("config key-value contains autoHeal pair", () => {
+  it("config key-value contains autoHeal + autoHealAfterCycles pairs", () => {
     const v = buildUIView(cfg, pool, ready, baseState, lastSpawn, null);
     const kvs = findByType(v.root, "key-value");
     const configKv = kvs[0]!;
@@ -935,6 +935,9 @@ describe("buildUIView — heal integration", () => {
     const autoHealPair = pairs.find((p) => p.key === "autoHeal");
     expect(autoHealPair).toBeTruthy();
     expect(autoHealPair?.value).toBe("true");
+    const cyclesPair = pairs.find((p) => p.key === "autoHealAfterCycles");
+    expect(cyclesPair).toBeTruthy();
+    expect(cyclesPair?.value).toBe("2");
   });
 
   it("lastHeal null → 'No heals yet' text node", () => {

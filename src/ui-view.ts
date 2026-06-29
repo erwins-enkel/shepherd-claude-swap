@@ -275,6 +275,7 @@ export function buildUIView(
         { key: "abortOnEmpty", value: String(cfg.abortOnEmpty) },
         { key: "makePrimaryButtons", value: String(cfg.makePrimaryButtons) },
         { key: "autoHeal", value: String(cfg.autoHeal) },
+        { key: "autoHealAfterCycles", value: String(cfg.autoHealAfterCycles) },
       ],
     },
   });
