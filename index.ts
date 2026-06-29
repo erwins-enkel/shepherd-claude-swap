@@ -8,8 +8,9 @@
 // happens at boot or on the background interval (see `src/prewarm.ts`).
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { PluginContext, SpawnPatch } from "./types";
-import { parseConfig } from "./src/config";
+import type { PluginContext, SpawnDescriptor, SpawnPatch } from "./types";
+import { parseConfig, type Strategy } from "./src/config";
+import type { PoolAccount } from "./src/accounts";
 import { Cswap, type Runner, type CswapSwitchResult } from "./src/cswap";
 import { History } from "./src/history";
 import { cswapBackupRoot, sessionProfileDir } from "./src/paths";
@@ -97,6 +98,48 @@ function executeSwitch(
 }
 
 /**
+ * Route an aux (review / plan-gate / doc) spawn without aborting, updating lastSpawn,
+ * or touching history. Called from `onSpawn` when `kind !== "session"` AND `cfg.routeAuxQuota`
+ * is set (a host whose reviewer sandbox binds a plugin-patched credentialDir — shepherd#1217+).
+ *
+ * - `parentSessionId` present (review / plan-gate): inherit the parent session's pinned
+ *   account. Falls open (`{}`) if the parent is untracked or its account is gone.
+ * - `parentSessionId` absent (doc / standalone critic): route to a pool account
+ *   EPHEMERALLY — `assign` result is used for the credentialDir only; `nextState` is
+ *   discarded (no cursor advance, no durable pin). Falls open if none eligible.
+ * Never calls `ctx.abortSpawn`.
+ */
+function auxSpawnPatch(
+  d: SpawnDescriptor,
+  state: SelectionState,
+  pool: PoolAccount[],
+  ready: Set<number>,
+  backupRoot: string,
+  strategy: Strategy,
+): SpawnPatch | void {
+  // review / plan-gate: keep the aux spawn on the parent session's account.
+  if (d.parentSessionId !== undefined) {
+    const pin = state.assignments[d.parentSessionId];
+    if (pin !== undefined) {
+      const acct = pool.find((a) => a.number === pin);
+      if (acct !== undefined) {
+        return { credentialDir: sessionProfileDir(backupRoot, pin, acct.email) };
+      }
+    }
+    return {}; // parent untracked / gone from pool → fall open, never abort
+  }
+  // session-less aux (doc-agent / standalone critic): route to a pool account
+  // EPHEMERALLY (no durable pin, no cursor persist); fall open if none eligible.
+  const result = assign(state, d.sessionId, pool, ready, strategy);
+  if (result.kind === "assigned") {
+    const acct = pool.find((a) => a.number === result.accountNumber);
+    const email = acct?.email ?? "";
+    return { credentialDir: sessionProfileDir(backupRoot, result.accountNumber, email) };
+  }
+  return {}; // warm / abort → never block an aux spawn
+}
+
+/**
  * Plugin entry. Returns a teardown that clears the background interval and best-effort
  * awaits in-flight warms. `register` runs BEFORE Shepherd serves HTTP, so awaiting the
  * boot-warm gate here is what makes spawn acceptance safe (no create-rollback window).
@@ -164,17 +207,20 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
 
   // ── Hot path: cheap in-memory selection + synchronous state persist. NO I/O.
   ctx.onSpawn((d): SpawnPatch | void => {
-    // Aux spawns (review / plan-gate / doc / standalone critic — shepherd#1205) run inside a
-    // bwrap "standard" sandbox that bind-mounts ONLY Shepherd's own claudeDir (~/.claude, the
-    // active account). It does NOT mount a plugin-supplied credentialDir: resolveSpawnMembrane
-    // threads the patched CLAUDE_CONFIG_DIR into --setenv but never into the bind list, so a
-    // pool-profile path resolves to the empty tmpfs HOME inside the sandbox → an UNAUTHENTICATED
-    // reviewer (re-login + theme prompt). We therefore do NOT patch aux spawns: returning no
-    // patch leaves them on the sandbox-bound active account (authenticated). Never abort — a
-    // refused review is terminal (no held-retry). Routing aux quota onto a pool account would
-    // need a Shepherd-side fix to bind the patched credentialDir into the aux sandbox (shepherd#1213).
+    // Aux spawns (review / plan-gate / doc / standalone critic — shepherd#1205) fire onSpawn so a
+    // plugin can route their quota onto a pool account. shepherd#1217 binds a plugin-patched
+    // credentialDir INTO the reviewer sandbox (validate-and-fail-open), so a routed pool dir yields
+    // an authenticated reviewer — re-enabling the routing that #25 had to disable. We gate this on
+    // `routeAuxQuota` because #1217 exposes no probe-able capability surface: on a host predating
+    // #1217 the patched dir is never mounted → an UNAUTHENTICATED reviewer (re-login + theme
+    // prompt), so an operator on such a host MUST set `routeAuxQuota: false` (pass-through, the #25
+    // behavior). Either way an aux spawn is NEVER aborted — a refused review is terminal (no
+    // held-retry). See README (aux-spawn section) for the default-true override + version caveat.
     const kind = d.kind ?? "session";
-    if (kind !== "session") return;
+    if (kind !== "session") {
+      if (!cfg.routeAuxQuota) return; // pass-through: leave aux on the sandbox-bound active account
+      return auxSpawnPatch(d, state, prewarmer.pool, prewarmer.ready, backupRoot, cfg.strategy);
+    }
 
     const result = assign(state, d.sessionId, prewarmer.pool, prewarmer.ready, cfg.strategy);
 

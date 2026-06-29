@@ -1338,12 +1338,13 @@ describe("register — POST switch-primary", () => {
 // Aux-spawn routing (review / plan-gate / doc) — shepherd#1205 fix
 // ───────────────────────────────────────────────────────────────────────────
 
-describe("register — aux-spawn pass-through (shepherd#1205)", () => {
-  // Aux spawns (review / plan-gate / doc) run in a bwrap sandbox that binds only Shepherd's
-  // active ~/.claude, NOT a plugin credentialDir. The plugin therefore returns NO patch for
-  // them: no credentialDir override (which would point at an unbound, empty dir → unauthenticated
-  // reviewer), no durable state, no lastSpawn/history, and — crucially — never an abort.
-  it("review w/ pinned parentSessionId → no patch; no abort; no new assignment; lastSpawn unchanged", async () => {
+describe("register — aux-spawn routing (shepherd#1205 / #1217)", () => {
+  // With routeAuxQuota=true (default — assumes a shepherd#1217+ host that binds a plugin-patched
+  // credentialDir into the reviewer sandbox), aux spawns (review / plan-gate / doc) are routed onto
+  // a pool account's credentialDir: review/plan-gate inherit the parent session's pinned account;
+  // doc/standalone-critic route to a pool account EPHEMERALLY (no durable pin, no cursor advance,
+  // no lastSpawn/history). They are NEVER aborted.
+  it("review w/ pinned parentSessionId → parent's credentialDir; no abort; no new assignment; lastSpawn unchanged", async () => {
     const { runner } = makeFakeRunner({ prewarmOk: true, listResult: twoNonActiveList });
     const timers = makeFakeTimers();
     const fc = makeFakeCtx();
@@ -1358,7 +1359,8 @@ describe("register — aux-spawn pass-through (shepherd#1205)", () => {
 
     // Spawn a real session first to get a pin.
     const parentPatch = runHook(hook, "parent-session") as SpawnPatch;
-    expect(parentPatch.credentialDir).toBeTruthy();
+    const parentDir = parentPatch.credentialDir;
+    expect(parentDir).toBeTruthy();
 
     const assignmentsBefore = JSON.parse(fc.store.get("assignments")!) as Record<string, number>;
     const statusCountBefore = fc.statuses.length;
@@ -1367,10 +1369,10 @@ describe("register — aux-spawn pass-through (shepherd#1205)", () => {
     const reviewPatch = runHook(hook, "review-session-id", {
       kind: "review",
       parentSessionId: "parent-session",
-    });
+    }) as SpawnPatch;
 
-    // No patch at all — the sandboxed reviewer stays on the bound active account.
-    expect(reviewPatch).toBeUndefined();
+    // Routed to the parent's pinned account dir.
+    expect(reviewPatch.credentialDir).toBe(parentDir);
 
     // No abort ever called.
     expect(fc.abortReasons).toHaveLength(0);
@@ -1384,7 +1386,7 @@ describe("register — aux-spawn pass-through (shepherd#1205)", () => {
     expect(fc.statuses.length).toBe(statusCountBefore);
   });
 
-  it("review w/ parentSessionId NOT in assignments → no patch; no abort", async () => {
+  it("review w/ parentSessionId NOT in assignments → {}; no abort", async () => {
     const { runner } = makeFakeRunner({ prewarmOk: true, listResult: twoNonActiveList });
     const timers = makeFakeTimers();
     const fc = makeFakeCtx();
@@ -1402,7 +1404,8 @@ describe("register — aux-spawn pass-through (shepherd#1205)", () => {
       parentSessionId: "nonexistent-parent",
     });
 
-    expect(patch).toBeUndefined();
+    // Untracked parent → fall open (empty patch), never abort.
+    expect(patch).toEqual({});
     expect(fc.abortReasons).toHaveLength(0);
   });
 
@@ -1434,7 +1437,7 @@ describe("register — aux-spawn pass-through (shepherd#1205)", () => {
     expect(fc.abortReasons).toHaveLength(1); // only from the normal session
   });
 
-  it("doc (no parentSessionId) → no patch; no durable assignment; no abort; lastSpawn/history untouched", async () => {
+  it("doc (no parentSessionId) w/ a ready pool account → pool credentialDir; no durable assignment; no abort; lastSpawn/history untouched", async () => {
     const { runner } = makeFakeRunner({ prewarmOk: true, listResult: twoNonActiveList });
     const timers = makeFakeTimers();
     const fc = makeFakeCtx();
@@ -1450,10 +1453,10 @@ describe("register — aux-spawn pass-through (shepherd#1205)", () => {
     const statusCountBefore = fc.statuses.length;
     const tlBefore = timelineLen(fc.uiViews);
 
-    const patch = runHook(hook, "doc-session-id", { kind: "doc" });
+    const patch = runHook(hook, "doc-session-id", { kind: "doc" }) as SpawnPatch;
 
-    // No patch — the doc agent stays on the sandbox-bound active account.
-    expect(patch).toBeUndefined();
+    // Routed ephemerally to a pool account.
+    expect(patch.credentialDir).toBeTruthy();
 
     // No durable assignment persisted for the doc session id.
     const rawAssignments = fc.store.get("assignments");
@@ -1469,7 +1472,7 @@ describe("register — aux-spawn pass-through (shepherd#1205)", () => {
     expect(fc.statuses.length).toBe(statusCountBefore);
   });
 
-  it("doc (no parentSessionId) w/ empty ready + abortOnEmpty:true → no patch; no abort", async () => {
+  it("doc (no parentSessionId) w/ empty ready + abortOnEmpty:true → {}; no abort", async () => {
     const { runner } = makeFakeRunner({ prewarmOk: false, listResult: twoNonActiveList });
     const timers = makeFakeTimers();
     const fc = makeFakeCtx({ config: { abortOnEmpty: true } });
@@ -1483,6 +1486,53 @@ describe("register — aux-spawn pass-through (shepherd#1205)", () => {
     const hook = fc.getHook();
 
     const patch = runHook(hook, "doc-id", { kind: "doc" });
+
+    // No ready pool account → fall open (empty patch), never abort.
+    expect(patch).toEqual({});
+    expect(fc.abortReasons).toHaveLength(0);
+  });
+
+  // ── routeAuxQuota=false (pre-#1217 host): pass through — NO patch, never abort ──
+  it("routeAuxQuota:false → review w/ pinned parent passes through (no patch); no abort", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true, listResult: twoNonActiveList });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx({ config: { routeAuxQuota: false } });
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    const hook = fc.getHook();
+
+    // Establish a real parent pin first.
+    expect((runHook(hook, "parent-session") as SpawnPatch).credentialDir).toBeTruthy();
+
+    const reviewPatch = runHook(hook, "review-session-id", {
+      kind: "review",
+      parentSessionId: "parent-session",
+    });
+
+    // No patch — the sandboxed reviewer stays on the bound active account.
+    expect(reviewPatch).toBeUndefined();
+    expect(fc.abortReasons).toHaveLength(0);
+  });
+
+  it("routeAuxQuota:false → doc passes through (no patch); no abort", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true, listResult: twoNonActiveList });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx({ config: { routeAuxQuota: false } });
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    const hook = fc.getHook();
+
+    const patch = runHook(hook, "doc-session-id", { kind: "doc" });
 
     expect(patch).toBeUndefined();
     expect(fc.abortReasons).toHaveLength(0);

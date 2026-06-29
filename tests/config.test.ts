@@ -16,6 +16,7 @@ describe("parseConfig", () => {
         bootWarmTimeoutMs: 30000,
         abortOnEmpty: true,
         makePrimaryButtons: true,
+        routeAuxQuota: true,
       } satisfies ResolvedConfig);
     });
   });
@@ -77,6 +78,18 @@ describe("parseConfig", () => {
 
     it("accepts makePrimaryButtons: true explicitly", () => {
       expect(parseConfig({ makePrimaryButtons: true }).makePrimaryButtons).toBe(true);
+    });
+
+    it("defaults routeAuxQuota to true", () => {
+      expect(parseConfig({}).routeAuxQuota).toBe(true);
+    });
+
+    it("accepts routeAuxQuota: false", () => {
+      expect(parseConfig({ routeAuxQuota: false }).routeAuxQuota).toBe(false);
+    });
+
+    it("accepts routeAuxQuota: true explicitly", () => {
+      expect(parseConfig({ routeAuxQuota: true }).routeAuxQuota).toBe(true);
     });
   });
 
@@ -243,6 +256,20 @@ describe("parseConfig", () => {
 
     it("throws if makePrimaryButtons is null", () => {
       expect(() => parseConfig({ makePrimaryButtons: null })).toThrow();
+    });
+  });
+
+  describe("validation — routeAuxQuota", () => {
+    it("throws if routeAuxQuota is a string", () => {
+      expect(() => parseConfig({ routeAuxQuota: "true" })).toThrow();
+    });
+
+    it("throws if routeAuxQuota is a number", () => {
+      expect(() => parseConfig({ routeAuxQuota: 1 })).toThrow();
+    });
+
+    it("throws if routeAuxQuota is null", () => {
+      expect(() => parseConfig({ routeAuxQuota: null })).toThrow();
     });
   });
 });

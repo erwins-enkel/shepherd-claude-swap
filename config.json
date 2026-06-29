@@ -8,5 +8,7 @@
   "refreshIntervalMs": 600000,
   "bootWarmTimeoutMs": 30000,
   "abortOnEmpty": true,
-  "makePrimaryButtons": true
+  "makePrimaryButtons": true,
+  "//routeAuxQuota": "DEFAULT true routes review/plan-gate/doc quota onto a pool account. REQUIRES a Shepherd release containing #1217 (NOT in v1.38.0 or earlier). On an older host you MUST set this to false or reviewers run UNAUTHENTICATED (re-login + theme prompt). JSON has no comments; this // key is ignored by the plugin.",
+  "routeAuxQuota": true
 }
