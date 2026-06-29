@@ -11,6 +11,21 @@ function isUnassignable(acct: PoolAccount | undefined): boolean {
   return !acct || !acct.usable || acct.rateLimited || acct.active;
 }
 
+/** Outcome of one auto-heal attempt, for status/observability. */
+export interface HealRecord {
+  at: string;
+  target: number;
+  outcome: "healed" | "failed";
+  restoreFailed: boolean;
+}
+
+/** Durable marker that a heal's restore left the primary on the wrong account. */
+export interface HealRestoreFailure {
+  at: string;
+  intendedActive: number;
+  landedActive: number | null;
+}
+
 export interface PrewarmerDeps {
   cswap: Cswap;
   cfg: ResolvedConfig;
@@ -21,6 +36,14 @@ export interface PrewarmerDeps {
   onChange?: () => void;
   /** Injectable fs-exists check (warm-time only, never on the hot path). Default `fs.existsSync`. */
   existsSync?: (path: string) => boolean;
+  /** Timestamp source for heal records. Default `() => new Date().toISOString()`. */
+  now?: () => string;
+  /** Called when a restore (switch back to the prior primary) is determined to have failed. */
+  onRestoreFailure?: (info: HealRestoreFailure) => void;
+  /** Called when a previously-recorded restore failure clears (active is the intended primary again). */
+  onRestoreRecovered?: () => void;
+  /** Seed `restoreFailure` from durable state on boot. Default null. */
+  initialRestoreFailure?: HealRestoreFailure | null;
 }
 
 /**
@@ -38,6 +61,12 @@ export class Prewarmer {
   readonly ready: Set<number> = new Set();
   /** Last `list()` error message (set on refresh failure, cleared on success) for diagnosability. */
   lastError: string | null = null;
+  /** Active ("primary") account number from the last successful refresh (undefined until first ok refresh). */
+  activeAccountNumber: number | undefined = undefined;
+  /** Last heal attempt outcome, for status/observability. */
+  lastHeal: HealRecord | null = null;
+  /** Durable restore-failure flag: primary may be on the wrong account. null when healthy. */
+  restoreFailure: HealRestoreFailure | null = null;
 
   private readonly cswap: Cswap;
   private readonly cfg: ResolvedConfig;
@@ -45,6 +74,14 @@ export class Prewarmer {
   private readonly backupRoot: string;
   private readonly onChange?: () => void;
   private readonly existsSync: (path: string) => boolean;
+  private readonly now: () => string;
+  private readonly onRestoreFailure?: (info: HealRestoreFailure) => void;
+  private readonly onRestoreRecovered?: () => void;
+  /** Per-account heal tracking: consecutive-unavailable streak + whether we've attempted this episode. */
+  private readonly healState = new Map<
+    number,
+    { unavailableStreak: number; attemptedThisEpisode: boolean }
+  >();
   /** De-dupes concurrent warms of the same account. */
   private readonly inFlight = new Map<number, Promise<void>>();
   private switching = false;
@@ -56,6 +93,10 @@ export class Prewarmer {
     this.backupRoot = deps.backupRoot;
     this.onChange = deps.onChange;
     this.existsSync = deps.existsSync ?? fsExistsSync;
+    this.now = deps.now ?? (() => new Date().toISOString());
+    this.onRestoreFailure = deps.onRestoreFailure;
+    this.onRestoreRecovered = deps.onRestoreRecovered;
+    this.restoreFailure = deps.initialRestoreFailure ?? null;
   }
 
   /**
@@ -72,6 +113,8 @@ export class Prewarmer {
           this.ready.delete(n);
         }
       }
+      this.activeAccountNumber = list.activeAccountNumber;
+      this.maybeRecoverRestore(list.activeAccountNumber);
       this.lastError = null;
     } catch (err) {
       this.lastError = err instanceof Error ? err.message : String(err);
@@ -157,6 +200,149 @@ export class Prewarmer {
 
   get isSwitching(): boolean {
     return this.switching;
+  }
+
+  /** Is account `n` in scope for prewarm/heal (honors include/exclude slot config)? */
+  private inScope(n: number): boolean {
+    return (
+      !this.cfg.excludeSlots.includes(n) &&
+      (this.cfg.includeSlots === null || this.cfg.includeSlots.includes(n))
+    );
+  }
+
+  /**
+   * Advance per-account consecutive-unavailable streaks from the current pool. Reset (and clear
+   * the episode flag) for any account no longer `reason:"unavailable"`; drop entries for accounts
+   * that left the pool. Called once per tick from `healUnavailable` (never from `refresh`).
+   */
+  private updateHealStreaks(): void {
+    const present = new Set<number>();
+    for (const acct of this.pool) {
+      present.add(acct.number);
+      if (acct.reason === "unavailable") {
+        const state = this.healState.get(acct.number);
+        if (state) state.unavailableStreak += 1;
+        else this.healState.set(acct.number, { unavailableStreak: 1, attemptedThisEpisode: false });
+      } else {
+        this.healState.set(acct.number, { unavailableStreak: 0, attemptedThisEpisode: false });
+      }
+    }
+    for (const n of [...this.healState.keys()]) {
+      if (!present.has(n)) this.healState.delete(n);
+    }
+  }
+
+  /** Lowest-numbered non-active, in-scope, unavailable account that's over threshold and unattempted. */
+  private pickHealTarget(): PoolAccount | undefined {
+    return this.pool
+      .filter((a) => {
+        if (a.reason !== "unavailable" || a.active || !this.inScope(a.number)) return false;
+        const state = this.healState.get(a.number);
+        return (
+          state !== undefined &&
+          state.unavailableStreak >= this.cfg.autoHealAfterCycles &&
+          !state.attemptedThisEpisode
+        );
+      })
+      .sort((a, b) => a.number - b.number)[0];
+  }
+
+  /** Clear a recorded restore failure once the intended primary is active again. */
+  private maybeRecoverRestore(active: number | undefined): void {
+    if (this.restoreFailure !== null && active === this.restoreFailure.intendedActive) {
+      this.restoreFailure = null;
+      this.onRestoreRecovered?.();
+    }
+  }
+
+  /**
+   * Auto-heal pass (called once per tick, AFTER refresh(), BEFORE warmStale()). Revives ONE
+   * non-active in-scope account that cswap has reported usageStatus:"unavailable" for
+   * `autoHealAfterCycles` consecutive refreshes, via a switch-to-and-back dance. One target per
+   * tick; one attempt per unavailable episode. Never throws.
+   */
+  async healUnavailable(): Promise<void> {
+    if (!this.cfg.autoHeal || this.switching || this.lastError !== null) return;
+
+    this.updateHealStreaks();
+
+    const target = this.pickHealTarget();
+    if (target === undefined) return;
+
+    const original = this.activeAccountNumber;
+    if (original === undefined) {
+      this.log.warn("auto-heal: skipping; active account unknown");
+      return;
+    }
+
+    // One attempt per episode, even if the dance below errors.
+    const state = this.healState.get(target.number);
+    if (state) state.attemptedThisEpisode = true;
+
+    this.beginSwitch();
+    try {
+      await this.runHealDance(target.number, original);
+    } finally {
+      this.endSwitch();
+    }
+  }
+
+  /** The switch-to-and-back dance for ONE target, then record the heal/restore outcome. */
+  private async runHealDance(target: number, original: number): Promise<void> {
+    try {
+      await this.cswap.switchTo(target);
+    } catch (err) {
+      this.log.warn(`auto-heal: switch to ${target} failed:`, String(err));
+      // Target switch failed → primary unchanged, no restore needed.
+      this.lastHeal = { at: this.now(), target, outcome: "failed", restoreFailed: false };
+      return;
+    }
+
+    await this.restorePrimary(original);
+    await this.refresh(); // re-classifies pool, re-reads active, may auto-clear an old restoreFailure
+
+    const restoreOk = this.recordRestoreOutcome(original);
+    const acct = this.pool.find((a) => a.number === target);
+    const healed = acct !== undefined && acct.reason !== "unavailable";
+    this.lastHeal = {
+      at: this.now(),
+      target,
+      outcome: healed ? "healed" : "failed",
+      restoreFailed: !restoreOk,
+    };
+  }
+
+  /** Switch back to the prior primary; retry once if it throws. */
+  private async restorePrimary(original: number): Promise<void> {
+    try {
+      await this.cswap.switchTo(original);
+    } catch (err) {
+      this.log.warn(`auto-heal: restore to ${original} threw, retrying once:`, String(err));
+      try {
+        await this.cswap.switchTo(original);
+      } catch (err2) {
+        this.log.warn(`auto-heal: restore retry to ${original} also threw:`, String(err2));
+      }
+    }
+  }
+
+  /**
+   * Judge restore success by the ACTUAL post-dance active (not by switchTo not throwing). On a
+   * mismatch, record + broadcast a restore failure. Returns whether the restore succeeded.
+   */
+  private recordRestoreOutcome(original: number): boolean {
+    const landed = this.activeAccountNumber;
+    if (landed === original) return true;
+    this.restoreFailure = {
+      at: this.now(),
+      intendedActive: original,
+      landedActive: landed ?? null,
+    };
+    this.log.warn(
+      `auto-heal: primary may be wrong — intended ${original}, landed ${landed ?? "unknown"}`,
+    );
+    this.onRestoreFailure?.(this.restoreFailure);
+    return false;
   }
 
   /** Warm every usable, non-rate-limited account that is not yet ready (fire-and-forget). */
