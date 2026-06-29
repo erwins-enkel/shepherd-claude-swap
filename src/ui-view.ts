@@ -218,6 +218,7 @@ export function buildUIView(
         { key: "rateLimitPct", value: `${cfg.rateLimitPct}%` },
         { key: "refreshIntervalMs", value: String(cfg.refreshIntervalMs) },
         { key: "abortOnEmpty", value: String(cfg.abortOnEmpty) },
+        { key: "makePrimaryButtons", value: String(cfg.makePrimaryButtons) },
       ],
     },
   });
