@@ -210,7 +210,10 @@ function makeFakeCtx(opts?: {
   };
 }
 
-function makeDescriptor(sessionId: string): SpawnDescriptor {
+function makeDescriptor(
+  sessionId: string,
+  opts?: { kind?: SpawnDescriptor["kind"]; parentSessionId?: string },
+): SpawnDescriptor {
   return {
     sessionId,
     repoRoot: "/repo",
@@ -219,14 +222,19 @@ function makeDescriptor(sessionId: string): SpawnDescriptor {
     argv: ["claude"],
     env: {},
     isolated: false,
+    ...opts,
   };
 }
 
 const now = () => "2026-06-27T12:00:00.000Z";
 
-function runHook(hook: SpawnHook | undefined, sessionId: string): SpawnPatch | void {
+function runHook(
+  hook: SpawnHook | undefined,
+  sessionId: string,
+  opts?: { kind?: SpawnDescriptor["kind"]; parentSessionId?: string },
+): SpawnPatch | void {
   if (!hook) throw new Error("onSpawn hook not registered");
-  return hook(makeDescriptor(sessionId)) as SpawnPatch | void;
+  return hook(makeDescriptor(sessionId, opts)) as SpawnPatch | void;
 }
 
 /** Walk the tree and return all nodes with matching type. */
@@ -1323,5 +1331,211 @@ describe("register — POST switch-primary", () => {
     // A new switch now succeeds (guard was released).
     const third = await handler(makeSwitchReq({ mode: "next" }));
     expect(third.status).toBe(200);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Aux-spawn routing (review / plan-gate / doc) — shepherd#1205 fix
+// ───────────────────────────────────────────────────────────────────────────
+
+describe("register — aux-spawn routing (shepherd#1205)", () => {
+  it("review w/ pinned parentSessionId → returns parent's credentialDir; no abort; no new assignment; lastSpawn unchanged", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true, listResult: twoNonActiveList });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    const hook = fc.getHook();
+
+    // Spawn a real session first to get a pin.
+    const parentPatch = runHook(hook, "parent-session") as SpawnPatch;
+    const parentDir = parentPatch.credentialDir;
+    expect(parentDir).toBeTruthy();
+
+    const assignmentsBefore = JSON.parse(fc.store.get("assignments")!) as Record<string, number>;
+    const statusCountBefore = fc.statuses.length;
+
+    // Spawn a review aux spawn for the same parent.
+    const reviewPatch = runHook(hook, "review-session-id", {
+      kind: "review",
+      parentSessionId: "parent-session",
+    }) as SpawnPatch;
+
+    // Must return the parent's credentialDir.
+    expect(reviewPatch.credentialDir).toBe(parentDir);
+
+    // No abort ever called.
+    expect(fc.abortReasons).toHaveLength(0);
+
+    // No new assignment entry for the review id.
+    const assignmentsAfter = JSON.parse(fc.store.get("assignments")!) as Record<string, number>;
+    expect(assignmentsAfter["review-session-id"]).toBeUndefined();
+    expect(assignmentsAfter).toEqual(assignmentsBefore);
+
+    // publish() not called by aux spawn → statuses length unchanged.
+    expect(fc.statuses.length).toBe(statusCountBefore);
+  });
+
+  it("review w/ parentSessionId NOT in assignments → returns {}; no abort", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true, listResult: twoNonActiveList });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    const hook = fc.getHook();
+
+    const patch = runHook(hook, "review-orphan", {
+      kind: "review",
+      parentSessionId: "nonexistent-parent",
+    });
+
+    expect(patch).toEqual({});
+    expect(fc.abortReasons).toHaveLength(0);
+  });
+
+  it("regression: review w/ empty ready + abortOnEmpty:true → does NOT throw PluginSpawnAborted", async () => {
+    // prewarmOk:false → nothing becomes ready; seed a parent pin in the store.
+    const { runner } = makeFakeRunner({ prewarmOk: false, listResult: twoNonActiveList });
+    const timers = makeFakeTimers();
+    const store = new Map<string, string>();
+    store.set("assignments", JSON.stringify({ "parent-s": 1 }));
+    store.set("cursor", JSON.stringify(0));
+    const fc = makeFakeCtx({ config: { abortOnEmpty: true }, store });
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    const hook = fc.getHook();
+
+    // Normal session spawn with abortOnEmpty:true → throws.
+    expect(() => runHook(hook, "new-session")).toThrow(PluginSpawnAborted);
+
+    // But review aux spawn does NOT throw, even with empty ready + abortOnEmpty:true.
+    expect(() =>
+      runHook(hook, "review-id", { kind: "review", parentSessionId: "parent-s" }),
+    ).not.toThrow();
+
+    expect(fc.abortReasons).toHaveLength(1); // only from the normal session
+  });
+
+  it("doc (no parentSessionId) w/ a ready pool account → returns pool credentialDir; no durable assignment; lastSpawn/history untouched", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true, listResult: twoNonActiveList });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    const hook = fc.getHook();
+
+    const statusCountBefore = fc.statuses.length;
+    const tlBefore = timelineLen(fc.uiViews);
+
+    const patch = runHook(hook, "doc-session-id", { kind: "doc" }) as SpawnPatch;
+
+    // Returns a credentialDir pointing at a pool account.
+    expect(patch.credentialDir).toBeTruthy();
+
+    // No durable assignment persisted for the doc session id.
+    const rawAssignments = fc.store.get("assignments");
+    const assignments =
+      rawAssignments !== undefined ? (JSON.parse(rawAssignments) as Record<string, number>) : {};
+    expect(assignments["doc-session-id"]).toBeUndefined();
+
+    // No abort.
+    expect(fc.abortReasons).toHaveLength(0);
+
+    // lastSpawn/history untouched — no new timeline event and no publish().
+    expect(timelineLen(fc.uiViews)).toBe(tlBefore);
+    expect(fc.statuses.length).toBe(statusCountBefore);
+  });
+
+  it("doc (no parentSessionId) w/ empty ready + abortOnEmpty:true → returns {}; no abort", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: false, listResult: twoNonActiveList });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx({ config: { abortOnEmpty: true } });
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    const hook = fc.getHook();
+
+    const patch = runHook(hook, "doc-id", { kind: "doc" });
+
+    expect(patch).toEqual({});
+    expect(fc.abortReasons).toHaveLength(0);
+  });
+
+  it("kind absent (old host) → identical to a normal session spawn (back-compat)", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true, listResult: twoNonActiveList });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx({ config: { abortOnEmpty: true } });
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    const hook = fc.getHook();
+
+    // No kind field → treated as a normal session spawn.
+    const patch = runHook(hook, "old-host-session") as SpawnPatch;
+    expect(patch.credentialDir).toBeTruthy();
+
+    // Assignment durably persisted (same as a regular session).
+    const assignments = JSON.parse(fc.store.get("assignments")!) as Record<string, number>;
+    expect(assignments["old-host-session"]).toBeDefined();
+  });
+
+  it("aux spawns never appear in the history spawn ring or lastSpawn", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true, listResult: twoNonActiveList });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    const hook = fc.getHook();
+
+    // Spawn a real session to establish a parent pin and a timeline event.
+    runHook(hook, "real-session");
+    const tlAfterReal = timelineLen(fc.uiViews);
+    expect(tlAfterReal).toBeGreaterThan(0);
+
+    // Aux review spawn.
+    runHook(hook, "review-id", { kind: "review", parentSessionId: "real-session" });
+
+    // Timeline must NOT have grown.
+    expect(timelineLen(fc.uiViews)).toBe(tlAfterReal);
+
+    // GET stats: lastSpawn must still reflect the real session, not the review.
+    const statsHandler = fc.routes.get("GET stats")!;
+    const body = (await (await statsHandler(new Request("http://x/stats"))).json()) as {
+      lastSpawn: { sessionId: string } | null;
+    };
+    expect(body.lastSpawn?.sessionId).toBe("real-session");
   });
 });

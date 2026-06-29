@@ -8,8 +8,9 @@
 // happens at boot or on the background interval (see `src/prewarm.ts`).
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { PluginContext, SpawnPatch } from "./types";
-import { parseConfig } from "./src/config";
+import type { PluginContext, SpawnDescriptor, SpawnPatch } from "./types";
+import { parseConfig, type Strategy } from "./src/config";
+import type { PoolAccount } from "./src/accounts";
 import { Cswap, type Runner, type CswapSwitchResult } from "./src/cswap";
 import { History } from "./src/history";
 import { cswapBackupRoot, sessionProfileDir } from "./src/paths";
@@ -97,6 +98,47 @@ function executeSwitch(
 }
 
 /**
+ * Route an aux (review / plan-gate / doc) spawn without aborting, updating lastSpawn,
+ * or touching history. Called from `onSpawn` when `kind !== "session"`.
+ *
+ * - `parentSessionId` present (review / plan-gate): inherit the parent session's pinned
+ *   account. Falls open (`{}`) if the parent is untracked or its account is gone.
+ * - `parentSessionId` absent (doc / standalone critic): route to a pool account
+ *   EPHEMERALLY — `assign` result is used for the credentialDir only; `nextState` is
+ *   discarded (no cursor advance, no durable pin). Falls open if none eligible.
+ * Never calls `ctx.abortSpawn`.
+ */
+function auxSpawnPatch(
+  d: SpawnDescriptor,
+  state: SelectionState,
+  pool: PoolAccount[],
+  ready: Set<number>,
+  backupRoot: string,
+  strategy: Strategy,
+): SpawnPatch | void {
+  // review / plan-gate: keep the aux spawn on the parent session's account.
+  if (d.parentSessionId !== undefined) {
+    const pin = state.assignments[d.parentSessionId];
+    if (pin !== undefined) {
+      const acct = pool.find((a) => a.number === pin);
+      if (acct !== undefined) {
+        return { credentialDir: sessionProfileDir(backupRoot, pin, acct.email) };
+      }
+    }
+    return {}; // parent untracked / gone from pool → fall open, never abort
+  }
+  // session-less aux (doc-agent / standalone critic): route to a pool account
+  // EPHEMERALLY (no durable pin, no cursor persist); fall open if none eligible.
+  const result = assign(state, d.sessionId, pool, ready, strategy);
+  if (result.kind === "assigned") {
+    const acct = pool.find((a) => a.number === result.accountNumber);
+    const email = acct?.email ?? "";
+    return { credentialDir: sessionProfileDir(backupRoot, result.accountNumber, email) };
+  }
+  return {}; // warm / abort → never block an aux spawn
+}
+
+/**
  * Plugin entry. Returns a teardown that clears the background interval and best-effort
  * awaits in-flight warms. `register` runs BEFORE Shepherd serves HTTP, so awaiting the
  * boot-warm gate here is what makes spawn acceptance safe (no create-rollback window).
@@ -164,6 +206,11 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
 
   // ── Hot path: cheap in-memory selection + synchronous state persist. NO I/O.
   ctx.onSpawn((d): SpawnPatch | void => {
+    const kind = d.kind ?? "session";
+    if (kind !== "session") {
+      return auxSpawnPatch(d, state, prewarmer.pool, prewarmer.ready, backupRoot, cfg.strategy);
+    }
+
     const result = assign(state, d.sessionId, prewarmer.pool, prewarmer.ready, cfg.strategy);
 
     if (result.kind === "assigned") {

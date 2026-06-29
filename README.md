@@ -91,6 +91,15 @@ an account, writes the sticky assignment to `ctx.state` (synchronously, before r
 and returns `{ credentialDir: <session-profile-dir> }`. The injected path becomes
 `CLAUDE_CONFIG_DIR` for the spawned agent.
 
+**Aux spawns (review / plan-gate / doc) — shepherd#1205:** When Shepherd fires `onSpawn`
+for a review or plan-gate sub-spawn, the plugin reuses the parent session's pinned account
+(same `credentialDir`, no new assignment, no abort). When Shepherd fires `onSpawn` for a
+session-less doc/critic spawn (no `parentSessionId`), the plugin routes it to a pool account
+ephemerally — the assignment is not stored, not shown in the lastSpawn or spawn timeline.
+If no pool account is ready for a session-less aux spawn, or if the parent session is
+untracked, the spawn falls open (`{}`); **aux spawns are never aborted**. Hosts predating
+shepherd#1205 (no `kind` field on `SpawnDescriptor`) are treated as normal session spawns.
+
 **Warm/retry resume edge case:** if a resume's pinned account is usable but its profile is
 not yet pre-warmed (e.g. right after a restart), the spawn is aborted with a "retry" message
 while a background re-warm is kicked off. This is a transient retry, not a failure — no

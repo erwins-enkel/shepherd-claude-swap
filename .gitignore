@@ -9,3 +9,6 @@ build/
 # subagent-driven-development scratch (ledger + review diffs)
 .superpowers/
 .fallow/
+
+# Shepherd-generated session artifacts (scratch — never committed)
+.shepherd-*
