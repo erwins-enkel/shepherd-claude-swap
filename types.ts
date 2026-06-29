@@ -6,6 +6,11 @@
 //            upstream plugin docs explicitly endorse vendoring this contract.
 // Do not edit by hand — re-vendor from the pinned commit to update. The plugin
 // imports the PluginContext/SpawnPatch types from here (erased at runtime).
+//
+// LOCAL DEVIATIONS (do not revert on re-vendor):
+//   • SpawnDescriptor.kind / parentSessionId — synced from shepherd#1205
+//     (commit 4d48948b); made optional here for back-compat with pre-#1205 hosts
+//     (consistent with publishUI?/publishGearItem? optionality). Rest unchanged.
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Public plugin contract for Shepherd's server-side, in-process plugin system
@@ -36,6 +41,15 @@ export interface PluginManifest {
  *  A COPY — mutating it does nothing; return a `SpawnPatch` to influence the spawn. */
 export interface SpawnDescriptor {
   sessionId: string;
+  /** What kind of spawn this is (issue #1205). "session" is a normal task session
+   *  (create/drain/resume); the others are the reviewer-style auto-process spawns that
+   *  also fire onSpawn so a plugin can route their quota. */
+  kind?: "session" | "review" | "plan-gate" | "doc";
+  /** For an aux spawn tied to a managed session (review, plan-gate): that session's id,
+   *  so a plugin can keep the aux spawn on the parent session's account. Undefined for a
+   *  normal session (it IS the parent) and for session-less aux spawns (doc-agent,
+   *  standalone critic). */
+  parentSessionId?: string;
   repoRoot: string;
   model: string | null;
   agentProvider: string;
