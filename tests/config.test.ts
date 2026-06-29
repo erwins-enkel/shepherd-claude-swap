@@ -17,6 +17,8 @@ describe("parseConfig", () => {
         abortOnEmpty: true,
         makePrimaryButtons: true,
         routeAuxQuota: true,
+        autoHeal: true,
+        autoHealAfterCycles: 2,
       } satisfies ResolvedConfig);
     });
   });
@@ -270,6 +272,66 @@ describe("parseConfig", () => {
 
     it("throws if routeAuxQuota is null", () => {
       expect(() => parseConfig({ routeAuxQuota: null })).toThrow();
+    });
+  });
+
+  describe("overrides — autoHeal", () => {
+    it("defaults to true", () => {
+      expect(parseConfig({}).autoHeal).toBe(true);
+    });
+
+    it("accepts false", () => {
+      expect(parseConfig({ autoHeal: false }).autoHeal).toBe(false);
+    });
+
+    it("accepts true explicitly", () => {
+      expect(parseConfig({ autoHeal: true }).autoHeal).toBe(true);
+    });
+  });
+
+  describe("validation — autoHeal", () => {
+    it("throws on non-boolean string", () => {
+      expect(() => parseConfig({ autoHeal: "yes" })).toThrow();
+    });
+
+    it("throws on number", () => {
+      expect(() => parseConfig({ autoHeal: 1 })).toThrow();
+    });
+
+    it("throws on null", () => {
+      expect(() => parseConfig({ autoHeal: null })).toThrow();
+    });
+  });
+
+  describe("overrides — autoHealAfterCycles", () => {
+    it("defaults to 2", () => {
+      expect(parseConfig({}).autoHealAfterCycles).toBe(2);
+    });
+
+    it("accepts 1", () => {
+      expect(parseConfig({ autoHealAfterCycles: 1 }).autoHealAfterCycles).toBe(1);
+    });
+
+    it("accepts 5", () => {
+      expect(parseConfig({ autoHealAfterCycles: 5 }).autoHealAfterCycles).toBe(5);
+    });
+  });
+
+  describe("validation — autoHealAfterCycles", () => {
+    it("throws on 0", () => {
+      expect(() => parseConfig({ autoHealAfterCycles: 0 })).toThrow();
+    });
+
+    it("throws on negative", () => {
+      expect(() => parseConfig({ autoHealAfterCycles: -1 })).toThrow();
+    });
+
+    it("throws on non-integer", () => {
+      expect(() => parseConfig({ autoHealAfterCycles: 2.5 })).toThrow();
+    });
+
+    it("throws on non-number", () => {
+      expect(() => parseConfig({ autoHealAfterCycles: "2" })).toThrow();
     });
   });
 });
