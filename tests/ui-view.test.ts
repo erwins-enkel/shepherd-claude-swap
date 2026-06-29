@@ -4,6 +4,7 @@ import type { PluginUINode } from "../types";
 import type { PoolAccount } from "../src/accounts";
 import type { SelectionState } from "../src/selection";
 import type { LastSpawn } from "../src/status";
+import type { HealRecord, HealRestoreFailure } from "../src/prewarm";
 import { parseConfig } from "../src/config";
 import { History, CHART_WINDOW, MAX_DETAILED_ACCOUNTS } from "../src/history";
 
@@ -905,5 +906,113 @@ describe("buildUIView — Make primary picker", () => {
   it("emits no action-button anywhere when makePrimaryButtons is false (pre-#1209 escape hatch)", () => {
     const v = buildUIView(cfgButtonsOff, pickerPool, pickerReady, baseState, null, null);
     expect(findByType(v.root, "action-button").length).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// autoHeal config pair + lastHeal section + restoreFailure callout
+// ---------------------------------------------------------------------------
+
+describe("buildUIView — heal integration", () => {
+  const sampleHeal: HealRecord = {
+    at: "2026-06-29T10:00:00.000Z",
+    target: 3,
+    outcome: "healed",
+    restoreFailed: false,
+  };
+
+  const sampleRestoreFailure: HealRestoreFailure = {
+    at: "2026-06-29T10:01:00.000Z",
+    intendedActive: 99,
+    landedActive: 2,
+  };
+
+  it("config key-value contains autoHeal + autoHealAfterCycles pairs", () => {
+    const v = buildUIView(cfg, pool, ready, baseState, lastSpawn, null);
+    const kvs = findByType(v.root, "key-value");
+    const configKv = kvs[0]!;
+    const pairs = configKv.props?.["pairs"] as Array<{ key: string; value: string }>;
+    const autoHealPair = pairs.find((p) => p.key === "autoHeal");
+    expect(autoHealPair).toBeTruthy();
+    expect(autoHealPair?.value).toBe("true");
+    const cyclesPair = pairs.find((p) => p.key === "autoHealAfterCycles");
+    expect(cyclesPair).toBeTruthy();
+    expect(cyclesPair?.value).toBe("2");
+  });
+
+  it("lastHeal null → 'No heals yet' text node", () => {
+    const v = buildUIView(cfg, pool, ready, baseState, lastSpawn, null, undefined, null, null);
+    const texts = findByType(v.root, "text");
+    const noHealsText = texts.find((t) => t.props?.["content"] === "No heals yet");
+    expect(noHealsText).toBeTruthy();
+  });
+
+  it("lastHeal non-null → 'Last heal' header + key-value with target/outcome/at", () => {
+    const v = buildUIView(
+      cfg,
+      pool,
+      ready,
+      baseState,
+      lastSpawn,
+      null,
+      undefined,
+      sampleHeal,
+      null,
+    );
+    const texts = findByType(v.root, "text");
+    const header = texts.find(
+      (t) => t.props?.["content"] === "Last heal" && t.props?.["weight"] === "bold",
+    );
+    expect(header).toBeTruthy();
+
+    const kvs = findByType(v.root, "key-value");
+    const healKv = kvs.find((kv) => {
+      const pairs = kv.props?.["pairs"] as Array<{ key: string; value: string }>;
+      return pairs?.some((p) => p.key === "target");
+    });
+    expect(healKv).toBeTruthy();
+    const pairs = healKv?.props?.["pairs"] as Array<{ key: string; value: string }>;
+    const keys = pairs.map((p) => p.key);
+    expect(keys).toContain("target");
+    expect(keys).toContain("outcome");
+    expect(keys).toContain("at");
+    const targetPair = pairs.find((p) => p.key === "target");
+    expect(targetPair?.value).toBe("#3");
+  });
+
+  it("restoreFailure null → no restore-failure callout", () => {
+    const v = buildUIView(cfg, pool, ready, baseState, null, null, undefined, null, null);
+    const callouts = findByType(v.root, "callout");
+    const restoreCallout = callouts.find(
+      (c) =>
+        typeof c.props?.["text"] === "string" &&
+        (c.props["text"] as string).includes("auto-heal could not restore"),
+    );
+    expect(restoreCallout).toBeUndefined();
+  });
+
+  it("restoreFailure non-null → error callout mentioning intendedActive and landedActive", () => {
+    const v = buildUIView(
+      cfg,
+      pool,
+      ready,
+      baseState,
+      null,
+      null,
+      undefined,
+      null,
+      sampleRestoreFailure,
+    );
+    const callouts = findByType(v.root, "callout");
+    const restoreCallout = callouts.find(
+      (c) =>
+        typeof c.props?.["text"] === "string" &&
+        (c.props["text"] as string).includes("auto-heal could not restore"),
+    );
+    expect(restoreCallout).toBeTruthy();
+    expect(restoreCallout?.props?.["tone"]).toBe("error");
+    const text = restoreCallout?.props?.["text"] as string;
+    expect(text).toContain("#99");
+    expect(text).toContain("2");
   });
 });

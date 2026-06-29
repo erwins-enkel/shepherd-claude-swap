@@ -10,5 +10,9 @@
   "abortOnEmpty": true,
   "makePrimaryButtons": true,
   "//routeAuxQuota": "DEFAULT true routes review/plan-gate/doc quota onto a pool account. REQUIRES a Shepherd release containing #1217 (NOT in v1.38.0 or earlier). On an older host you MUST set this to false or reviewers run UNAUTHENTICATED (re-login + theme prompt). JSON has no comments; this // key is ignored by the plugin.",
-  "routeAuxQuota": true
+  "routeAuxQuota": true,
+  "//autoHeal": "Enables auto-healing of accounts cswap transiently marks unavailable.",
+  "autoHeal": true,
+  "//autoHealAfterCycles": "Consecutive refreshes an account must report usageStatus 'unavailable' before auto-heal attempts a switch-to-and-back revive. Integer >= 1.",
+  "autoHealAfterCycles": 2
 }

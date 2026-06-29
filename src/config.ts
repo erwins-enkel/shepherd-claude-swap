@@ -12,6 +12,8 @@ export interface ResolvedConfig {
   abortOnEmpty: boolean;
   makePrimaryButtons: boolean;
   routeAuxQuota: boolean;
+  autoHeal: boolean;
+  autoHealAfterCycles: number;
 }
 
 function requireFiniteInt(val: unknown, name: string): number {
@@ -135,6 +137,24 @@ export function parseConfig(raw: Record<string, unknown>): ResolvedConfig {
     throw new Error(`routeAuxQuota: expected boolean, got ${JSON.stringify(routeAuxQuota)}`);
   }
 
+  // autoHeal — enables auto-healing of accounts cswap transiently marks unavailable. Default true.
+  const autoHeal = "autoHeal" in raw ? raw["autoHeal"] : true;
+  if (typeof autoHeal !== "boolean") {
+    throw new Error(`autoHeal: expected boolean, got ${JSON.stringify(autoHeal)}`);
+  }
+
+  // autoHealAfterCycles — consecutive cycles an account must report unavailable before auto-heal
+  // attempts a switch-to-and-back revive. Default 2, must be finite integer >= 1.
+  const autoHealAfterCycles = requireFiniteInt(
+    "autoHealAfterCycles" in raw ? raw["autoHealAfterCycles"] : 2,
+    "autoHealAfterCycles",
+  );
+  if (autoHealAfterCycles < 1) {
+    throw new Error(
+      `autoHealAfterCycles: expected integer >= 1, got ${JSON.stringify(autoHealAfterCycles)}`,
+    );
+  }
+
   return {
     cswapBin,
     includeSlots,
@@ -147,5 +167,7 @@ export function parseConfig(raw: Record<string, unknown>): ResolvedConfig {
     abortOnEmpty,
     makePrimaryButtons,
     routeAuxQuota,
+    autoHeal,
+    autoHealAfterCycles,
   };
 }

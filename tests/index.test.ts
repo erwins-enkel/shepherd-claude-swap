@@ -1592,3 +1592,135 @@ describe("register — aux-spawn routing (shepherd#1205 / #1217)", () => {
     expect(body.lastSpawn?.sessionId).toBe("real-session");
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// Auto-heal: tick calls healUnavailable + onRestoreFailure persistence
+// ───────────────────────────────────────────────────────────────────────────
+
+/** Pool with one active account (#99) and one unavailable account (#1). */
+const unavailableAccountList = {
+  schemaVersion: 1,
+  activeAccountNumber: 99,
+  accounts: [
+    {
+      number: 99,
+      email: "active@x.com",
+      active: true,
+      usageStatus: "ok",
+      usage: { fiveHour: { pct: 0 }, sevenDay: { pct: 0 } },
+    },
+    {
+      number: 1,
+      email: "unavail@x.com",
+      active: false,
+      usageStatus: "unavailable",
+      usage: null,
+    },
+  ],
+};
+
+describe("register — auto-heal integration", () => {
+  it("tick calls healUnavailable: --switch-to is invoked after enough consecutive unavailable cycles", async () => {
+    // autoHealAfterCycles:1 so healing triggers on the first tick.
+    const { runner, calls } = makeFakeRunner({
+      prewarmOk: true,
+      listResult: unavailableAccountList,
+    });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx({ config: { autoHeal: true, autoHealAfterCycles: 1 } });
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+
+    const switchBefore = calls.filter((c) => c.args[0] === "--switch-to").length;
+
+    // Drive one tick (refresh → healUnavailable → warmStale).
+    timers.handles[0]!.fn();
+    await new Promise((r) => setTimeout(r, 50));
+
+    // At least one --switch-to call must have been made (to the unavailable account).
+    expect(calls.filter((c) => c.args[0] === "--switch-to").length).toBeGreaterThan(switchBefore);
+  });
+
+  it("onRestoreFailure persists healRestoreFailure to ctx.state when restore lands on wrong account", async () => {
+    // Scenario: account 1 is unavailable, heal dance runs (autoHealAfterCycles:1).
+    // The post-heal --list returns account 1 as active (not 99) → restore failure.
+    let listCallCount = 0;
+    const wrongActiveList = {
+      schemaVersion: 1,
+      activeAccountNumber: 1,
+      accounts: [
+        {
+          number: 99,
+          email: "active@x.com",
+          active: false,
+          usageStatus: "ok",
+          usage: { fiveHour: { pct: 0 }, sevenDay: { pct: 0 } },
+        },
+        {
+          number: 1,
+          email: "unavail@x.com",
+          active: true,
+          usageStatus: "ok",
+          usage: { fiveHour: { pct: 0 }, sevenDay: { pct: 0 } },
+        },
+      ],
+    };
+
+    const runner: Runner = async (_bin, args) => {
+      if (args[0] === "--list") {
+        listCallCount++;
+        // First two lists return the unavailable scenario; third+ (post-heal refresh) → wrong active.
+        const result = listCallCount <= 2 ? unavailableAccountList : wrongActiveList;
+        return { stdout: JSON.stringify(result), stderr: "", code: 0, timedOut: false };
+      }
+      if (args[0] === "run") {
+        return { stdout: "", stderr: "", code: 0, timedOut: false };
+      }
+      if (args[0] === "--switch-to" || args[0] === "--switch") {
+        const toNumber = args[0] === "--switch-to" ? Number(args[1]) : 2;
+        return {
+          stdout: JSON.stringify({
+            schemaVersion: 1,
+            switched: true,
+            from: { number: 99, email: "active@x.com" },
+            to: { number: toNumber, email: "target@x.com" },
+            strategy: "rotation",
+            reason: "switched",
+            message: "ok",
+            warnings: [],
+          }),
+          stderr: "",
+          code: 0,
+          timedOut: false,
+        };
+      }
+      return { stdout: "", stderr: "", code: 0, timedOut: false };
+    };
+
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx({ config: { autoHeal: true, autoHealAfterCycles: 1 } });
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+
+    // Drive one tick; the heal dance runs and the post-heal refresh returns wrong active.
+    timers.handles[0]!.fn();
+    await new Promise((r) => setTimeout(r, 50));
+
+    // onRestoreFailure should have been called, persisting to ctx.state.
+    const rawRf = fc.store.get("healRestoreFailure");
+    expect(rawRf).toBeDefined();
+    const rf = JSON.parse(rawRf!) as { intendedActive: number; landedActive: number };
+    expect(rf.intendedActive).toBe(99);
+    expect(rf.landedActive).toBe(1);
+  });
+});
