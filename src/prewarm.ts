@@ -328,9 +328,23 @@ export class Prewarmer {
 
   /**
    * Judge restore success by the ACTUAL post-dance active (not by switchTo not throwing). On a
-   * mismatch, record + broadcast a restore failure. Returns whether the restore succeeded.
+   * mismatch, or if the post-dance refresh failed (making the active account unobservable), record
+   * + broadcast a restore failure. Returns whether the restore succeeded.
    */
   private recordRestoreOutcome(original: number): boolean {
+    // Post-dance refresh failed: landed account is unobservable → fail closed.
+    if (this.lastError !== null) {
+      this.restoreFailure = {
+        at: this.now(),
+        intendedActive: original,
+        landedActive: null,
+      };
+      this.log.warn(
+        `auto-heal: post-dance refresh failed; active account unknown — intended ${original}, landed unknown`,
+      );
+      this.onRestoreFailure?.(this.restoreFailure);
+      return false;
+    }
     const landed = this.activeAccountNumber;
     if (landed === original) return true;
     this.restoreFailure = {

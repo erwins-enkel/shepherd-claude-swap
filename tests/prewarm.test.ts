@@ -706,6 +706,50 @@ describe("Prewarmer.healUnavailable — active account unknown", () => {
   });
 });
 
+describe("Prewarmer.healUnavailable — post-dance refresh failure (fail closed)", () => {
+  it("treats failed post-dance refresh as restore failure with landedActive null", async () => {
+    const failures: HealRestoreFailure[] = [];
+    const { prewarmer, fake } = makeHealer(
+      {
+        active: 1,
+        accts: [
+          { number: 1, active: true },
+          { number: 2, usageStatus: "unavailable" },
+        ],
+      },
+      {},
+      { onRestoreFailure: (info) => failures.push(info) },
+    );
+    // Switch to 2 heals it; restore to 1 is a non-throwing no-op (state stays on 2).
+    // After the restore switch, list starts failing so the post-dance refresh blows up.
+    fake.setOnSwitchTo((target, state) => {
+      if (target === 2) {
+        state.active = 2;
+        for (const a of state.accts) a.active = a.number === 2;
+        const a = state.accts.find((x) => x.number === 2);
+        if (a) a.usageStatus = "ok";
+      }
+      // target === 1: deliberate no-op (simulates stuck restore); trigger post-dance list failure.
+      if (target === 1) {
+        fake.setListFails(true);
+      }
+    });
+
+    await prewarmer.refresh(); // ok — pool populated, streak 0
+    await prewarmer.healUnavailable(); // streak 1 → no dance
+    await prewarmer.healUnavailable(); // streak 2 → dance fires; post-dance list fails
+
+    expect(prewarmer.restoreFailure).toEqual({
+      at: "2026-06-29T00:00:00.000Z",
+      intendedActive: 1,
+      landedActive: null,
+    });
+    expect(failures).toHaveLength(1);
+    expect(prewarmer.lastHeal?.restoreFailed).toBe(true);
+    expect(prewarmer.lastHeal?.outcome).toBe("failed");
+  });
+});
+
 describe("Prewarmer.healUnavailable — target switch fails", () => {
   it("records failed heal and skips restore when switching to target throws", async () => {
     const { prewarmer, fake } = makeHealer({
