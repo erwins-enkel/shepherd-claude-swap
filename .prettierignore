@@ -1,0 +1,5 @@
+# release-please owns these and writes them in its own (non-Prettier) style.
+# Re-broken on every release, so ignore rather than reformat. See .shepherd-plan.md.
+.release-please-manifest.json
+CHANGELOG.md
+plugin.json
