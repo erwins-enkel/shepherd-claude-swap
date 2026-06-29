@@ -1,0 +1,18 @@
+name: release-please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      # Manifest mode: reads release-please-config.json + .release-please-manifest.json.
+      # Opens/updates a release PR from Conventional Commits; merging it bumps
+      # package.json + plugin.json ($.version), writes CHANGELOG.md, tags, and cuts a release.
+      - uses: googleapis/release-please-action@v4
