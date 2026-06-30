@@ -1,4 +1,4 @@
-export type Strategy = "round-robin" | "least-used";
+export type Strategy = "round-robin" | "least-used" | "reset-soon";
 
 export interface ResolvedConfig {
   cswapBin: string;
@@ -70,9 +70,9 @@ export function parseConfig(raw: Record<string, unknown>): ResolvedConfig {
 
   // strategy
   const strategy = "strategy" in raw ? raw["strategy"] : "round-robin";
-  if (strategy !== "round-robin" && strategy !== "least-used") {
+  if (strategy !== "round-robin" && strategy !== "least-used" && strategy !== "reset-soon") {
     throw new Error(
-      `strategy: expected "round-robin" | "least-used", got ${JSON.stringify(strategy)}`,
+      `strategy: expected "round-robin" | "least-used" | "reset-soon", got ${JSON.stringify(strategy)}`,
     );
   }
 

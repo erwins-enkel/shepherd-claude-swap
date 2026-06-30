@@ -219,6 +219,10 @@ describe("parseConfig", () => {
     it("accepts round-robin explicitly", () => {
       expect(parseConfig({ strategy: "round-robin" }).strategy).toBe("round-robin");
     });
+
+    it("accepts reset-soon", () => {
+      expect(parseConfig({ strategy: "reset-soon" }).strategy).toBe("reset-soon");
+    });
   });
 
   describe("validation — strategy", () => {
