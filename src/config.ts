@@ -146,7 +146,7 @@ export function parseConfig(raw: Record<string, unknown>): ResolvedConfig {
   }
 
   // autoHealAfterCycles — consecutive cycles an account must report unavailable before auto-heal
-  // attempts a switch-to-and-back revive. Default 2, must be finite integer >= 1.
+  // attempts a revive (switch to it → launch one Claude session → switch back). Default 2, must be finite integer >= 1.
   const autoHealAfterCycles = requireFiniteInt(
     "autoHealAfterCycles" in raw ? raw["autoHealAfterCycles"] : 2,
     "autoHealAfterCycles",

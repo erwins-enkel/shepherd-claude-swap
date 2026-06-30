@@ -920,15 +920,15 @@ describe("Prewarmer.healUnavailable — deferred-outcome reconcile (cache race)"
     });
     await prewarmer.refresh();
     await prewarmer.healUnavailable(); // streak 1
-    fake.serveStaleListOnce();
-    await prewarmer.healUnavailable(); // streak 2 → dance; false-negative "failed", reconcile armed
-    expect(prewarmer.lastHeal?.outcome).toBe("failed");
+    // No stale list — post-dance read shows account 2 ok → reconcile flips to "healed" immediately.
+    await prewarmer.healUnavailable(); // streak 2 → dance; account 2 ok → outcome "healed", reconcile armed
+    expect(prewarmer.lastHeal?.outcome).toBe("healed");
 
-    // Account 2 leaves the pool before the reconcile tick.
+    // Account 2 leaves the pool before the reconcile tick; reconcile is still pending.
     fake.state.accts = fake.state.accts.filter((a) => a.number !== 2);
     await prewarmer.refresh();
     await prewarmer.healUnavailable();
-    // Absent target → cleared without judging; outcome left unchanged (not flipped, not "healed").
-    expect(prewarmer.lastHeal?.outcome).toBe("failed");
+    // Absent target → early return without judging; "healed" must NOT be flipped to "failed".
+    expect(prewarmer.lastHeal?.outcome).toBe("healed");
   });
 });
