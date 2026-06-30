@@ -374,52 +374,96 @@ function switchJson(target: number): string {
   });
 }
 
-/** Default switch behavior: making `target` active refreshes (heals) it. */
+/** Default switch behavior: only changes which account is active (no heal — heal is on launch). */
 function defaultSwitch(target: number, state: HealState): void {
   state.active = target;
   for (const a of state.accts) a.active = a.number === target;
-  const a = state.accts.find((x) => x.number === target);
-  if (a) a.usageStatus = "ok";
 }
 
+/** One combined call-log entry, so tests can assert switch/run ordering. */
+type CallEvent = { kind: "switch" | "run"; target: number };
+
 /**
- * Stateful fake runner driving --list (current state) and --switch-to (records
- * calls, mutates state via a handler). `failSwitch` targets return non-zero so
- * `cswap.switchTo` throws.
+ * Stateful fake runner driving --list (current state), --switch-to (records calls, mutates
+ * active via a handler), and run (records the launched account and — by default — heals it if
+ * it is the active default login, modeling a real Claude session refreshing the OAuth token).
+ * `failSwitch` targets return non-zero so `cswap.switchTo` throws; `failLaunch` targets return
+ * non-zero so the prewarm runner reports a failed launch. `healsOnLaunch` toggles whether a
+ * launch heals (so "still unavailable after dance" tests can model a no-op launch). A one-shot
+ * `serveStaleList` latch makes the next --list return the pre-heal snapshot (cswap's 15s cache).
  */
 function makeHealRunner(initial: HealState) {
   const state: HealState = { active: initial.active, accts: initial.accts.map((a) => ({ ...a })) };
   const switchCalls: number[] = [];
+  const launchedAccounts: number[] = [];
+  const callLog: CallEvent[] = [];
   const failSwitch = new Set<number>();
+  const failLaunch = new Set<number>();
   let listFails = false;
+  let healsOnLaunch = true;
+  let staleSnapshot: string | null = null;
   let onSwitchTo: (target: number, state: HealState) => void = defaultSwitch;
 
+  const ok = (stdout: string) => ({ stdout, stderr: "", code: 0, timedOut: false });
+  const fail = (stderr: string) => ({ stdout: "", stderr, code: 1, timedOut: false });
+
+  const handleList = () => {
+    if (listFails) return fail("list boom");
+    if (staleSnapshot !== null) {
+      const stale = staleSnapshot;
+      staleSnapshot = null; // one-shot: a single --list serves the cached pre-heal snapshot
+      return ok(stale);
+    }
+    return ok(listJson(state));
+  };
+
+  const handleSwitch = (target: number) => {
+    switchCalls.push(target);
+    callLog.push({ kind: "switch", target });
+    if (failSwitch.has(target)) return fail("switch boom");
+    onSwitchTo(target, state);
+    return ok(switchJson(target));
+  };
+
+  // `cswap run <n> -- <args>`: argv = ["run", "<n>", "--", ...args]
+  const handleRun = (target: number) => {
+    launchedAccounts.push(target);
+    callLog.push({ kind: "run", target });
+    if (failLaunch.has(target)) return fail("launch failed");
+    // A real Claude session refreshes the OAuth token cswap refused to refresh, but only for
+    // the now-active default login (`cswap run <active>` fast-paths claude under ~/.claude).
+    if (healsOnLaunch && state.active === target) {
+      const a = state.accts.find((x) => x.number === target);
+      if (a) a.usageStatus = "ok";
+    }
+    return ok("");
+  };
+
   const runner: Runner = async (_bin, args) => {
-    if (args[0] === "--list") {
-      return listFails
-        ? { stdout: "", stderr: "list boom", code: 1, timedOut: false }
-        : { stdout: listJson(state), stderr: "", code: 0, timedOut: false };
-    }
-    if (args[0] === "--switch-to") {
-      const target = Number(args[1]);
-      switchCalls.push(target);
-      if (failSwitch.has(target)) {
-        return { stdout: "", stderr: "switch boom", code: 1, timedOut: false };
-      }
-      onSwitchTo(target, state);
-      return { stdout: switchJson(target), stderr: "", code: 0, timedOut: false };
-    }
-    return { stdout: "", stderr: "", code: 0, timedOut: false };
+    if (args[0] === "--list") return handleList();
+    if (args[0] === "--switch-to") return handleSwitch(Number(args[1]));
+    if (args[0] === "run") return handleRun(Number(args[1]));
+    return ok("");
   };
 
   return {
     runner,
     switchCalls,
+    launchedAccounts,
+    callLog,
     state,
     setListFails: (v: boolean) => {
       listFails = v;
     },
+    setHealsOnLaunch: (v: boolean) => {
+      healsOnLaunch = v;
+    },
+    /** Make the next --list serve a pre-heal (stale) snapshot of the current state. */
+    serveStaleListOnce: () => {
+      staleSnapshot = listJson(state);
+    },
     failSwitch: (n: number) => failSwitch.add(n),
+    failLaunch: (n: number) => failLaunch.add(n),
     setOnSwitchTo: (f: (target: number, state: HealState) => void) => {
       onSwitchTo = f;
     },
@@ -481,11 +525,8 @@ describe("Prewarmer.healUnavailable — one attempt per episode", () => {
         { number: 2, usageStatus: "unavailable" },
       ],
     });
-    // The dance does NOT heal account 2 (stays unavailable).
-    fake.setOnSwitchTo((target, state) => {
-      state.active = target;
-      for (const a of state.accts) a.active = a.number === target;
-    });
+    // The launch does NOT heal account 2 (stays unavailable).
+    fake.setHealsOnLaunch(false);
     await prewarmer.refresh();
 
     await prewarmer.healUnavailable(); // streak 1
@@ -499,7 +540,7 @@ describe("Prewarmer.healUnavailable — one attempt per episode", () => {
     expect(fake.switchCalls).toEqual([2, 1]);
 
     // Account 2 recovers, then goes unavailable again → fresh episode heals.
-    fake.setOnSwitchTo(defaultSwitch);
+    fake.setHealsOnLaunch(true);
     fake.state.accts[1]!.usageStatus = "ok";
     await prewarmer.refresh(); // pool sees account 2 ok
     await prewarmer.healUnavailable(); // resets streak/episode for account 2
@@ -636,13 +677,11 @@ describe("Prewarmer.healUnavailable — restore failure", () => {
       {},
       { onRestoreFailure: (info) => failures.push(info) },
     );
-    // Switch to 2 heals it and makes it active; switching back to 1 has NO effect.
+    // Switch to 2 makes it active (the launch then heals it); switching back to 1 has NO effect.
     fake.setOnSwitchTo((target, state) => {
       if (target === 2) {
         state.active = 2;
         for (const a of state.accts) a.active = a.number === 2;
-        const a = state.accts.find((x) => x.number === 2);
-        if (a) a.usageStatus = "ok";
       }
       // target === 1: silently no-op → restore lands on the wrong account.
     });
@@ -720,14 +759,13 @@ describe("Prewarmer.healUnavailable — post-dance refresh failure (fail closed)
       {},
       { onRestoreFailure: (info) => failures.push(info) },
     );
-    // Switch to 2 heals it; restore to 1 is a non-throwing no-op (state stays on 2).
-    // After the restore switch, list starts failing so the post-dance refresh blows up.
+    // Switch to 2 makes it active (the launch then heals it); restore to 1 is a non-throwing
+    // no-op (state stays on 2). After the restore switch, list starts failing so the post-dance
+    // refresh blows up.
     fake.setOnSwitchTo((target, state) => {
       if (target === 2) {
         state.active = 2;
         for (const a of state.accts) a.active = a.number === 2;
-        const a = state.accts.find((x) => x.number === 2);
-        if (a) a.usageStatus = "ok";
       }
       // target === 1: deliberate no-op (simulates stuck restore); trigger post-dance list failure.
       if (target === 1) {
@@ -771,5 +809,126 @@ describe("Prewarmer.healUnavailable — target switch fails", () => {
       restoreFailed: false,
     });
     expect(prewarmer.restoreFailure).toBeNull();
+  });
+});
+
+describe("Prewarmer.healUnavailable — launches a Claude session against the target", () => {
+  it("launches the stuck account, ordered between switch-to-target and switch-to-original", async () => {
+    const { prewarmer, fake } = makeHealer({
+      active: 1,
+      accts: [
+        { number: 1, active: true },
+        { number: 2, usageStatus: "unavailable" },
+      ],
+    });
+    await prewarmer.refresh();
+    await prewarmer.healUnavailable(); // streak 1
+    await prewarmer.healUnavailable(); // streak 2 → dance
+
+    expect(fake.launchedAccounts).toContain(2);
+    // Ordering: switch→2, run→2, switch→1.
+    expect(fake.callLog).toEqual([
+      { kind: "switch", target: 2 },
+      { kind: "run", target: 2 },
+      { kind: "switch", target: 1 },
+    ]);
+    expect(prewarmer.lastHeal?.outcome).toBe("healed");
+  });
+});
+
+describe("Prewarmer.healUnavailable — launch failure still restores + records", () => {
+  it("a failed launch still restores the prior primary and records lastHeal (warns, no throw)", async () => {
+    const { prewarmer, fake, warnings } = makeHealer({
+      active: 1,
+      accts: [
+        { number: 1, active: true },
+        { number: 2, usageStatus: "unavailable" },
+      ],
+    });
+    fake.failLaunch(2); // the run against the target returns non-zero
+    await prewarmer.refresh();
+    await prewarmer.healUnavailable(); // streak 1
+    await expect(prewarmer.healUnavailable()).resolves.toBeUndefined(); // streak 2 → dance
+
+    expect(fake.launchedAccounts).toContain(2);
+    expect(fake.switchCalls).toEqual([2, 1]); // restore still happened
+    expect(prewarmer.lastHeal?.target).toBe(2);
+    expect(prewarmer.lastHeal?.outcome).toBe("failed"); // launch failed → not healed
+    expect(prewarmer.restoreFailure).toBeNull();
+    expect(warnings.some((w) => w.includes("claude session launch for 2 failed"))).toBe(true);
+  });
+});
+
+describe("Prewarmer.healUnavailable — deferred-outcome reconcile (cache race)", () => {
+  it("reconciles a false-negative failed → healed on a later fresh, settled refresh", async () => {
+    const { prewarmer, fake } = makeHealer({
+      active: 1,
+      accts: [
+        { number: 1, active: true },
+        { number: 2, usageStatus: "unavailable" },
+      ],
+    });
+    await prewarmer.refresh();
+    await prewarmer.healUnavailable(); // streak 1
+    // Launch heals the backing state, but the immediate post-dance --list serves the cached
+    // (pre-heal) unavailable snapshot → first heal records "failed" with a pending reconcile.
+    fake.serveStaleListOnce();
+    await prewarmer.healUnavailable(); // streak 2 → dance; post-dance read is the stale snapshot
+    expect(prewarmer.lastHeal?.target).toBe(2);
+    expect(prewarmer.lastHeal?.outcome).toBe("failed");
+
+    // A subsequent tick: fresh --list now returns account 2 ok → reconcile flips to "healed".
+    await prewarmer.refresh();
+    await prewarmer.healUnavailable();
+    expect(prewarmer.lastHeal?.outcome).toBe("healed");
+  });
+
+  it("skips reconcile on a failed-refresh tick; the next successful-refresh tick reconciles", async () => {
+    const { prewarmer, fake } = makeHealer({
+      active: 1,
+      accts: [
+        { number: 1, active: true },
+        { number: 2, usageStatus: "unavailable" },
+      ],
+    });
+    await prewarmer.refresh();
+    await prewarmer.healUnavailable(); // streak 1
+    fake.serveStaleListOnce();
+    await prewarmer.healUnavailable(); // streak 2 → dance; false-negative "failed", reconcile armed
+    expect(prewarmer.lastHeal?.outcome).toBe("failed");
+
+    // Failed-refresh tick: lastError set → reconcile must be skipped.
+    fake.setListFails(true);
+    await prewarmer.refresh();
+    await prewarmer.healUnavailable();
+    expect(prewarmer.lastHeal?.outcome).toBe("failed"); // unchanged
+
+    // Successful-refresh tick: account 2 ok → reconcile flips to "healed".
+    fake.setListFails(false);
+    await prewarmer.refresh();
+    await prewarmer.healUnavailable();
+    expect(prewarmer.lastHeal?.outcome).toBe("healed");
+  });
+
+  it("clears the pending marker without judging when the target is absent from the fresh pool", async () => {
+    const { prewarmer, fake } = makeHealer({
+      active: 1,
+      accts: [
+        { number: 1, active: true },
+        { number: 2, usageStatus: "unavailable" },
+      ],
+    });
+    await prewarmer.refresh();
+    await prewarmer.healUnavailable(); // streak 1
+    fake.serveStaleListOnce();
+    await prewarmer.healUnavailable(); // streak 2 → dance; false-negative "failed", reconcile armed
+    expect(prewarmer.lastHeal?.outcome).toBe("failed");
+
+    // Account 2 leaves the pool before the reconcile tick.
+    fake.state.accts = fake.state.accts.filter((a) => a.number !== 2);
+    await prewarmer.refresh();
+    await prewarmer.healUnavailable();
+    // Absent target → cleared without judging; outcome left unchanged (not flipped, not "healed").
+    expect(prewarmer.lastHeal?.outcome).toBe("failed");
   });
 });
