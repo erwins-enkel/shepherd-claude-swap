@@ -300,28 +300,6 @@ export function buildUIView(
     }
   }
 
-  // ── Assignments table ─────────────────────────────────────────────────────
-  nodes.push({ type: "text", props: { content: "Assignments", weight: "bold" } });
-
-  const assignEntries = Object.entries(state.assignments);
-  if (assignEntries.length === 0) {
-    nodes.push({
-      type: "table",
-      props: {
-        columns: ["Session", "Account"],
-        rows: [],
-      },
-    });
-  } else {
-    nodes.push({
-      type: "table",
-      props: {
-        columns: ["Session", "Account"],
-        rows: assignEntries.map(([sid, n]) => [sid, `#${n}`]),
-      },
-    });
-  }
-
   // ── Last spawn key-value ──────────────────────────────────────────────────
   nodes.push(...buildLastSpawnNodes(lastSpawn));
 
