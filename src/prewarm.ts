@@ -84,6 +84,9 @@ export class Prewarmer {
   >();
   /** De-dupes concurrent warms of the same account. */
   private readonly inFlight = new Map<number, Promise<void>>();
+  /** A heal attempt awaiting outcome reconciliation against the next fresh pool (cswap's
+   *  15s usage cache can make runHealDance's own post-dance read a false negative). */
+  private pendingHealReconcile: { target: number } | null = null;
   private switching = false;
 
   constructor(deps: PrewarmerDeps) {
@@ -258,10 +261,21 @@ export class Prewarmer {
   /**
    * Auto-heal pass (called once per tick, AFTER refresh(), BEFORE warmStale()). Revives ONE
    * non-active in-scope account that cswap has reported usageStatus:"unavailable" for
-   * `autoHealAfterCycles` consecutive refreshes, via a switch-to-and-back dance. One target per
-   * tick; one attempt per unavailable episode. Never throws.
+   * `autoHealAfterCycles` consecutive refreshes: switch to the stuck account → launch one real
+   * Claude session against it (cswap deliberately refuses to refresh a token while a session is
+   * live, so only a real `-p` session refreshes the OAuth token) → switch back. One target per
+   * tick; one attempt per unavailable episode. The heal outcome is deferred — cswap's 15s usage
+   * cache can make the post-dance read a false negative, so it is reconciled on a later fresh,
+   * settled tick. The stuck account is the active primary for up to `healLaunchTimeoutMs`, an
+   * extended exposure/lock window: pass-through spawns can land on it, and `POST switch-primary`
+   * is rejected while the switch is in progress. Never throws.
    */
   async healUnavailable(): Promise<void> {
+    // Reconcile a prior attempt's outcome first — but only against a fresh, settled pool.
+    // (Independent of autoHeal so a pending marker still resolves if auto-heal was disabled.)
+    if (this.lastError === null && !this.switching) {
+      this.reconcilePendingHeal();
+    }
     if (!this.cfg.autoHeal || this.switching || this.lastError !== null) return;
 
     this.updateHealStreaks();
@@ -287,7 +301,10 @@ export class Prewarmer {
     }
   }
 
-  /** The switch-to-and-back dance for ONE target, then record the heal/restore outcome. */
+  /**
+   * The heal dance for ONE target: switch to it → launch one real Claude session against it →
+   * switch back, then record the heal/restore outcome (the outcome is reconciled later).
+   */
   private async runHealDance(target: number, original: number): Promise<void> {
     try {
       await this.cswap.switchTo(target);
@@ -297,6 +314,13 @@ export class Prewarmer {
       this.lastHeal = { at: this.now(), target, outcome: "failed", restoreFailed: false };
       return;
     }
+
+    // A bare switch does not make cswap re-validate the account; only running a real Claude
+    // session against it does (Claude Code refreshes the OAuth token cswap refused to refresh
+    // while a session was live). <target> is now the active default login, so `cswap run
+    // <target>` fast-paths claude under ~/.claude. Best-effort: a failed/timed-out launch
+    // still proceeds to restore.
+    await this.launchHealSession(target);
 
     await this.restorePrimary(original);
     await this.refresh(); // re-classifies pool, re-reads active, may auto-clear an old restoreFailure
@@ -310,6 +334,47 @@ export class Prewarmer {
       outcome: healed ? "healed" : "failed",
       restoreFailed: !restoreOk,
     };
+    // The post-dance refresh may have read cswap's 15s-cached (pre-heal) usage, so `healed`
+    // can be a false negative. Defer: reconcile on the next tick's fresh, settled refresh.
+    this.pendingHealReconcile = { target };
+  }
+
+  /**
+   * Launch ONE real Claude session against the now-active target so cswap re-validates it:
+   * `cswap run <target> -- <healLaunchArgs>` fast-paths claude under ~/.claude, and a real
+   * session refreshes the OAuth token cswap would not. Best-effort and bounded by
+   * `healLaunchTimeoutMs` (the runner kills a hung child); a failure is logged, not thrown —
+   * the caller still restores the prior primary.
+   */
+  private async launchHealSession(target: number): Promise<void> {
+    const res = await this.cswap.prewarm(
+      target,
+      this.cfg.healLaunchArgs,
+      this.cfg.healLaunchTimeoutMs,
+    );
+    if (!res.ok) {
+      this.log.warn(
+        `auto-heal: claude session launch for ${target} failed: ${res.error ?? "unknown"}`,
+      );
+    }
+  }
+
+  /**
+   * Finalize a deferred heal outcome against the current (fresh) pool. cswap caches usage for
+   * ~15s, so runHealDance's own post-dance read can be a false negative; this re-judges on a
+   * later tick whose refresh succeeded. Absent target → clear without judging (unobservable,
+   * not failed). Only correct lastHeal if it still refers to the pending target (a newer heal
+   * may have replaced it).
+   */
+  private reconcilePendingHeal(): void {
+    const pending = this.pendingHealReconcile;
+    if (pending === null) return;
+    this.pendingHealReconcile = null;
+    const acct = this.pool.find((a) => a.number === pending.target);
+    if (acct === undefined) return;
+    if (this.lastHeal === null || this.lastHeal.target !== pending.target) return;
+    const healed = acct.reason !== "unavailable";
+    this.lastHeal = { ...this.lastHeal, outcome: healed ? "healed" : "failed" };
   }
 
   /** Switch back to the prior primary; retry once if it throws. */

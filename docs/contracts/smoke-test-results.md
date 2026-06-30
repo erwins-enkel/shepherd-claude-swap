@@ -42,3 +42,32 @@ profile). This is correct and safe — the plugin never injects a non-existent `
 but it means rotation spans **non-active** accounts only. See the README "Limitations" section.
 A future enhancement could let the active account participate by injecting the default
 `~/.claude` instead of a per-account profile; deferred as out of v1 scope.
+
+---
+
+## Auto-heal session-launch — verification (Step 0)
+
+**Date:** 2026-06-30. cswap **0.14.0**, claude **2.1.195**, Linux host.
+
+**Read-only checks performed:**
+
+- `cswap --list --json` executed on the host: returned `schemaVersion: 1`, 3 accounts, all
+  `usageStatus: "ok"`. No naturally-`unavailable` account available to stage a non-invasive flip.
+
+**Mechanism verified against source:**
+
+- The end-to-end chain (switch primary to stuck → `cswap run` refreshes OAuth token →
+  switch back persists fresh token → next `--list` → `ok`) is verified against cswap **0.14.0
+  source** (see [`docs/contracts/cswap-heal-mechanism.md`](cswap-heal-mechanism.md) for the
+  pinned file:line evidence).
+
+**Invasive checks intentionally NOT run:**
+
+- **Step 0a** (stage a fake-`unavailable` account by expiring a backup-copy token under a live
+  session) and **Step 0b** (expire the active account's access token, run
+  `cswap run <active> -- -p ok`, observe the credential advance) were deliberately skipped.
+  Both manipulate the operator's live production OAuth credentials and consume quota; no
+  naturally-unavailable account existed to test the flip non-invasively.
+
+**Conclusion:** the end-to-end `unavailable → ok` flip is **NOT yet verified against live
+cswap**. Treat auto-heal as best-effort. (Step 0c default.)

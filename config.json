@@ -13,6 +13,10 @@
   "routeAuxQuota": true,
   "//autoHeal": "Enables auto-healing of accounts cswap transiently marks unavailable.",
   "autoHeal": true,
-  "//autoHealAfterCycles": "Consecutive refreshes an account must report usageStatus 'unavailable' before auto-heal attempts a switch-to-and-back revive. Integer >= 1.",
-  "autoHealAfterCycles": 2
+  "//autoHealAfterCycles": "Consecutive refreshes an account must report usageStatus 'unavailable' before auto-heal attempts a revive (switch to it → launch one Claude session → switch back). Integer >= 1.",
+  "autoHealAfterCycles": 2,
+  "//healLaunchArgs": "Claude args for the auto-heal launch, run as 'cswap run <target> -- <healLaunchArgs>'. Must start a real session that performs an API turn (refreshes OAuth) and exits on its own — '-p' headless one-shot. NOT prewarmArgs ('--version' does no API turn, heals nothing). Non-empty string array.",
+  "healLaunchArgs": ["-p", "ok"],
+  "//healLaunchTimeoutMs": "Timeout (ms) bounding the auto-heal launch; kills a hung session. Sized to a claude cold start + one -p turn + slack. Positive finite number.",
+  "healLaunchTimeoutMs": 60000
 }

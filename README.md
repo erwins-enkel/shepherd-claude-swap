@@ -82,8 +82,10 @@ All fields are optional — the shipped `config.json` sets every default explici
 | `abortOnEmpty`        | `boolean`                       | `true`          | Refuse spawns (`ctx.abortSpawn`) when no usable account is available — Shepherd then holds and retries a refused create (no task loss) and hard-blocks a non-forced resume. Set `false` to fail-open (not recommended).                                                                                                                                                                                                                                                                                      |
 | `makePrimaryButtons`  | `boolean`                       | `true`          | Show a per-account **Make primary** `action-button` in the panel (see _Make primary picker_ below). Requires a host whose `publishUI` renderer includes `action-button` (shepherd#1209/#1210). Set `false` on an older host to fall back to badge-only.                                                                                                                                                                                                                                                      |
 | `routeAuxQuota`       | `boolean`                       | `true`          | Route aux spawns (review / plan-gate / doc) onto a pool account (see _Aux spawns_ below). **Requires a Shepherd release containing shepherd#1217**, which binds the routed `credentialDir` into the reviewer sandbox. ⚠️ #1217 is **not yet in a shipped release** (latest v1.38.0 predates it), so on any host without it you **must** set `false` or routed reviewers run **unauthenticated** (re-login + theme prompt). Default `true` is a deliberate choice; the opt-out is annotated in `config.json`. |
-| `autoHeal`            | `boolean`                       | `true`          | Auto-revive non-active accounts that cswap transiently reports as `usageStatus: "unavailable"` (a usage-fetch failure, not a real auth fault), by switching the primary to the stuck account and back. Set `false` to disable.                                                                                                                                                                                                                                                                               |
+| `autoHeal`            | `boolean`                       | `true`          | Auto-revive non-active accounts that cswap transiently reports as `usageStatus: "unavailable"` (a usage-fetch failure, not a real auth fault), by switching the primary to the stuck account, launching a real Claude session against it, and switching back. Set `false` to disable.                                                                                                                                                                                                                        |
 | `autoHealAfterCycles` | `number`                        | `2`             | Consecutive `--list` refreshes an account must stay `unavailable` before a heal is attempted. Higher = more conservative (waits out transient blips).                                                                                                                                                                                                                                                                                                                                                        |
+| `healLaunchArgs`      | `string[]`                      | `["-p","ok"]`   | Claude args for the heal-session launch (`cswap run <target> -- <healLaunchArgs>`). Must trigger a real API turn so the OAuth token is refreshed; `-p` headless exits on completion. A trivial quota cost per heal. Must be non-empty.                                                                                                                                                                                                                                                                       |
+| `healLaunchTimeoutMs` | `number`                        | `60000`         | Timeout (ms) for the heal-session launch. Kills a hung session. Sized to a Claude cold start + one `-p` turn + slack.                                                                                                                                                                                                                                                                                                                                                                                        |
 
 ---
 
@@ -143,22 +145,52 @@ worktree is lost; resuming again once the account is warm lands on the same pinn
 ready accounts are re-warmed out of band.
 
 **Auto-healing unavailable accounts:** cswap sometimes marks a non-active account
-`usageStatus: "unavailable"` when a transient usage-fetch fails — not a real auth fault, but
-the account drops out of rotation until cswap revives it. The manual fix is
-`cswap --switch-to <stuck>` then `--switch-to <primary>`; `autoHeal` automates that dance.
+`usageStatus: "unavailable"` when a transient usage-fetch fails. This is not a real auth
+fault, but the account drops out of rotation until cswap can fetch its usage successfully.
+The root cause: cswap refuses to refresh the OAuth token of an account that has a live
+session profile (it would rotate the token out from under the running agent). Once the token
+expires, usage fetches fail → `unavailable`.
+
+A bare `cswap --switch-to <stuck>` / `--switch-to <primary>` does **not** fix this — without
+a real Claude session performing an API turn, the token is never refreshed. The correct manual
+fix is: `cswap --switch-to <stuck>`, then run a real Claude session (`cswap run <stuck> -- -p
+ok`), then `cswap --switch-to <primary>`. `autoHeal` automates this dance.
 
 On each background tick, after an account has been `unavailable` for `autoHealAfterCycles`
-consecutive refreshes, the plugin switches the primary to that account and back (one account
-per tick), under the same guard as `POST switch-primary` (never on the spawn hot path). One
-attempt per unavailable episode; tracking resets when the account returns to `ok`. Only
-`usageStatus: "unavailable"` non-active in-scope accounts are healed —
-`token_expired` / `no_credentials` / `api_key` are cswap's job and are left alone.
+consecutive refreshes, the plugin:
+
+1. Switches the primary to the stuck account (`cswap --switch-to <stuck>`).
+2. Launches a real Claude session against it (`cswap run <stuck> -- <healLaunchArgs>`,
+   default `-p ok`), which performs an API turn and refreshes the OAuth token.
+3. Switches the primary back to the previous account.
+
+The next `--list` fetch then sees fresh credentials → `ok`. One attempt per unavailable
+episode; tracking resets when the account returns to `ok`. Only `usageStatus: "unavailable"`
+non-active in-scope accounts are healed — `token_expired` / `no_credentials` / `api_key` are
+cswap's job and are left alone.
 
 **Timing is in refresh cycles**, so wall-clock latency depends on `refreshIntervalMs`. At the
 shipped `config.json` value (600 000 ms = 10 min) with `autoHealAfterCycles: 2`, the first
 heal fires ~2 cycles ≈ **20 minutes** after an account goes (and stays) unavailable; additional
 stuck accounts heal one per subsequent cycle (~10 min apart). Lower `refreshIntervalMs` and/or
 `autoHealAfterCycles` for faster recovery.
+
+**Exposure / lock window:** for up to `healLaunchTimeoutMs` (default 60 s) the stuck account
+is the active primary. Pass-through spawns can land on it only if `abortOnEmpty: false` or
+`routeAuxQuota: false` (the defaults keep spawns off it). `POST switch-primary` returns 409
+during that window.
+
+**Outcome lag:** the "Last heal" status in `GET stats` and the Settings panel may briefly show
+`failed` for a genuine heal, converging within one `refreshIntervalMs` (≈60 s at the code
+default of 60 000 ms; longer at the shipped config.json value of 600 000 ms).
+
+**Dead refresh token:** if the account's refresh token is truly invalid (needs
+`cswap --add-account`), no session launch heals it — it stays `unavailable`. One attempt per
+episode; the operator must re-authenticate.
+
+**Best-effort:** the end-to-end `unavailable → ok` flip is verified against cswap **source**
+(see [`docs/contracts/cswap-heal-mechanism.md`](docs/contracts/cswap-heal-mechanism.md)) but
+not yet against live cswap. Treat auto-heal as best-effort.
 
 **Restore safety:** if switching back to the prior primary fails (or lands on the wrong
 account), the plugin records a durable warning — surfaced as an error in `GET stats` and the

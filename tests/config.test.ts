@@ -19,6 +19,8 @@ describe("parseConfig", () => {
         routeAuxQuota: true,
         autoHeal: true,
         autoHealAfterCycles: 2,
+        healLaunchArgs: ["-p", "ok"],
+        healLaunchTimeoutMs: 60000,
       } satisfies ResolvedConfig);
     });
   });
@@ -332,6 +334,75 @@ describe("parseConfig", () => {
 
     it("throws on non-number", () => {
       expect(() => parseConfig({ autoHealAfterCycles: "2" })).toThrow();
+    });
+  });
+
+  describe("overrides — healLaunchArgs", () => {
+    it('defaults to ["-p", "ok"]', () => {
+      expect(parseConfig({}).healLaunchArgs).toEqual(["-p", "ok"]);
+    });
+
+    it("accepts a valid non-empty string array", () => {
+      expect(parseConfig({ healLaunchArgs: ["-p", "hello"] }).healLaunchArgs).toEqual([
+        "-p",
+        "hello",
+      ]);
+    });
+  });
+
+  describe("validation — healLaunchArgs", () => {
+    it("throws if not an array", () => {
+      expect(() => parseConfig({ healLaunchArgs: "--version" })).toThrow(
+        /healLaunchArgs: expected non-empty array of strings/,
+      );
+    });
+
+    it("throws if empty array", () => {
+      expect(() => parseConfig({ healLaunchArgs: [] })).toThrow(
+        /healLaunchArgs: expected non-empty array of strings/,
+      );
+    });
+
+    it("throws if element is not a string", () => {
+      expect(() => parseConfig({ healLaunchArgs: ["-p", 42] })).toThrow(
+        /healLaunchArgs\[1\]: expected string/,
+      );
+    });
+  });
+
+  describe("overrides — healLaunchTimeoutMs", () => {
+    it("defaults to 60000", () => {
+      expect(parseConfig({}).healLaunchTimeoutMs).toBe(60000);
+    });
+
+    it("accepts a valid positive number", () => {
+      expect(parseConfig({ healLaunchTimeoutMs: 30000 }).healLaunchTimeoutMs).toBe(30000);
+    });
+  });
+
+  describe("validation — healLaunchTimeoutMs", () => {
+    it("throws on zero", () => {
+      expect(() => parseConfig({ healLaunchTimeoutMs: 0 })).toThrow(
+        /healLaunchTimeoutMs: expected positive finite number/,
+      );
+    });
+
+    it("throws on negative", () => {
+      expect(() => parseConfig({ healLaunchTimeoutMs: -1 })).toThrow(
+        /healLaunchTimeoutMs: expected positive finite number/,
+      );
+    });
+
+    it("throws on non-finite / NaN / non-number", () => {
+      expect(() => parseConfig({ healLaunchTimeoutMs: Infinity })).toThrow(
+        /healLaunchTimeoutMs: expected positive finite number/,
+      );
+      expect(() => parseConfig({ healLaunchTimeoutMs: NaN })).toThrow(
+        /healLaunchTimeoutMs: expected positive finite number/,
+      );
+      expect(() => parseConfig({ healLaunchTimeoutMs: "60000" })).toThrow(
+        /healLaunchTimeoutMs: expected positive finite number/,
+      );
     });
   });
 });

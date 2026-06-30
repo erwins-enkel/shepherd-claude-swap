@@ -14,6 +14,8 @@ export interface ResolvedConfig {
   routeAuxQuota: boolean;
   autoHeal: boolean;
   autoHealAfterCycles: number;
+  healLaunchArgs: string[];
+  healLaunchTimeoutMs: number;
 }
 
 function requireFiniteInt(val: unknown, name: string): number {
@@ -144,7 +146,7 @@ export function parseConfig(raw: Record<string, unknown>): ResolvedConfig {
   }
 
   // autoHealAfterCycles — consecutive cycles an account must report unavailable before auto-heal
-  // attempts a switch-to-and-back revive. Default 2, must be finite integer >= 1.
+  // attempts a revive (switch to it → launch one Claude session → switch back). Default 2, must be finite integer >= 1.
   const autoHealAfterCycles = requireFiniteInt(
     "autoHealAfterCycles" in raw ? raw["autoHealAfterCycles"] : 2,
     "autoHealAfterCycles",
@@ -152,6 +154,32 @@ export function parseConfig(raw: Record<string, unknown>): ResolvedConfig {
   if (autoHealAfterCycles < 1) {
     throw new Error(
       `autoHealAfterCycles: expected integer >= 1, got ${JSON.stringify(autoHealAfterCycles)}`,
+    );
+  }
+
+  // healLaunchArgs
+  const rawHealLaunchArgs = "healLaunchArgs" in raw ? raw["healLaunchArgs"] : ["-p", "ok"];
+  if (!Array.isArray(rawHealLaunchArgs) || rawHealLaunchArgs.length === 0) {
+    throw new Error(
+      `healLaunchArgs: expected non-empty array of strings, got ${JSON.stringify(rawHealLaunchArgs)}`,
+    );
+  }
+  const healLaunchArgs: string[] = rawHealLaunchArgs.map((v: unknown, i: number) => {
+    if (typeof v !== "string") {
+      throw new Error(`healLaunchArgs[${i}]: expected string, got ${JSON.stringify(v)}`);
+    }
+    return v;
+  });
+
+  // healLaunchTimeoutMs
+  const healLaunchTimeoutMs = "healLaunchTimeoutMs" in raw ? raw["healLaunchTimeoutMs"] : 60000;
+  if (
+    typeof healLaunchTimeoutMs !== "number" ||
+    !Number.isFinite(healLaunchTimeoutMs) ||
+    healLaunchTimeoutMs <= 0
+  ) {
+    throw new Error(
+      `healLaunchTimeoutMs: expected positive finite number, got ${JSON.stringify(healLaunchTimeoutMs)}`,
     );
   }
 
@@ -169,5 +197,7 @@ export function parseConfig(raw: Record<string, unknown>): ResolvedConfig {
     routeAuxQuota,
     autoHeal,
     autoHealAfterCycles,
+    healLaunchArgs,
+    healLaunchTimeoutMs,
   };
 }
