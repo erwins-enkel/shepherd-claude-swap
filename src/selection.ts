@@ -23,9 +23,13 @@ export type AssignResult =
  *   - "round-robin": cursor % eligible.length, advance cursor.
  *   - "least-used": account with lowest max(fiveHourPct ?? 100, sevenDayPct ?? 100);
  *     tie-break by lowest account number. Cursor still advances by 1.
+ *   - "reset-soon": among eligible accounts whose number is in `imminent` (7-day reset within 24h
+ *     with capacity — computed by the caller, see `computeImminent`), pick by the least-used metric;
+ *     when none are imminent, fall back to least-used over all eligible. Cursor still advances by 1.
  *   None eligible → "abort".
  *
- * Deterministic; no Date/random.
+ * `imminent` is supplied by the caller (clock lives there) so this stays deterministic; no
+ * Date/random here.
  */
 export function assign(
   state: SelectionState,
@@ -33,6 +37,7 @@ export function assign(
   pool: PoolAccount[],
   ready: Set<number>,
   strategy: Strategy,
+  imminent: Set<number>,
 ): AssignResult {
   const pin = state.assignments[sessionId];
 
@@ -89,8 +94,7 @@ export function assign(
     };
   }
 
-  const picked =
-    strategy === "least-used" ? pickLeastUsed(eligible) : eligible[state.cursor % eligible.length]!;
+  const picked = pickByStrategy(strategy, eligible, imminent, state.cursor);
 
   return {
     kind: "assigned",
@@ -100,6 +104,27 @@ export function assign(
       assignments: { ...state.assignments, [sessionId]: picked.number },
     },
   };
+}
+
+/**
+ * Pick the eligible account per `strategy`. Deterministic; no Date/random.
+ *  - "reset-soon": prefer eligible accounts in `imminent` (7-day reset within 24h with capacity),
+ *    chosen by the least-used metric; fall back to least-used over all eligible when none imminent.
+ *  - "least-used": least-used over all eligible.
+ *  - "round-robin": cursor % eligible.length.
+ */
+function pickByStrategy(
+  strategy: Strategy,
+  eligible: PoolAccount[],
+  imminent: Set<number>,
+  cursor: number,
+): PoolAccount {
+  if (strategy === "reset-soon") {
+    const imminentEligible = eligible.filter((a) => imminent.has(a.number));
+    return pickLeastUsed(imminentEligible.length > 0 ? imminentEligible : eligible);
+  }
+  if (strategy === "least-used") return pickLeastUsed(eligible);
+  return eligible[cursor % eligible.length]!;
 }
 
 /**

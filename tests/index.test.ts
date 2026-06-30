@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { register, type PluginDeps } from "../index";
+import { register, computeImminent, type PluginDeps } from "../index";
 import { PluginSpawnAborted } from "../types";
+import type { PoolAccount } from "../src/accounts";
 import type {
   PluginContext,
   PluginUINode,
@@ -1722,5 +1723,96 @@ describe("register — auto-heal integration", () => {
     const rf = JSON.parse(rawRf!) as { intendedActive: number; landedActive: number };
     expect(rf.intendedActive).toBe(99);
     expect(rf.landedActive).toBe(1);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// computeImminent — pure 7-day-reset-soon classifier (reset-soon strategy)
+// ───────────────────────────────────────────────────────────────────────────
+
+describe("computeImminent", () => {
+  const NOW_MS = Date.parse("2026-06-30T10:00:00.000Z");
+  const H = 60 * 60 * 1000;
+  const RATE_LIMIT = 90;
+  /** ISO `resetsAt` at NOW_MS + offsetMs. */
+  const at = (offsetMs: number): string => new Date(NOW_MS + offsetMs).toISOString();
+
+  function poolAcct(n: number, o: Partial<PoolAccount> = {}): PoolAccount {
+    return {
+      number: n,
+      email: `acct${n}@example.com`,
+      usable: true,
+      rateLimited: false,
+      reason: null,
+      fiveHourPct: 10,
+      sevenDayPct: 10,
+      fiveHourResetsAt: null,
+      sevenDayResetsAt: at(23 * H),
+      fiveHourResetClock: null,
+      sevenDayResetClock: null,
+      fiveHourResetCountdown: null,
+      sevenDayResetCountdown: null,
+      active: false,
+      usageUnavailable: false,
+      ...o,
+    };
+  }
+
+  const imminent = (o: Partial<PoolAccount>): boolean =>
+    computeImminent([poolAcct(1, o)], NOW_MS, RATE_LIMIT).has(1);
+
+  it("7-day reset within 24h with capacity → imminent", () => {
+    expect(imminent({ sevenDayResetsAt: at(23 * H) })).toBe(true);
+  });
+
+  it("7-day reset exactly at now+24h → NOT imminent (strict <)", () => {
+    expect(imminent({ sevenDayResetsAt: at(24 * H) })).toBe(false);
+  });
+
+  it("just under now+24h → imminent", () => {
+    expect(imminent({ sevenDayResetsAt: at(24 * H - 1) })).toBe(true);
+  });
+
+  it("reset just in the past → NOT imminent", () => {
+    expect(imminent({ sevenDayResetsAt: at(-1) })).toBe(false);
+  });
+
+  it("null sevenDayResetsAt → NOT imminent", () => {
+    expect(imminent({ sevenDayResetsAt: null })).toBe(false);
+  });
+
+  it("unparseable sevenDayResetsAt → NOT imminent", () => {
+    expect(imminent({ sevenDayResetsAt: "not-a-date" })).toBe(false);
+  });
+
+  it("5h headroom boundary: fiveHourPct == rateLimitPct - 10 (80) → imminent (<=)", () => {
+    expect(imminent({ fiveHourPct: 80 })).toBe(true);
+  });
+
+  it("5h just over the headroom (81) → NOT imminent (funnel guard)", () => {
+    expect(imminent({ fiveHourPct: 81 })).toBe(false);
+  });
+
+  it("7d eligibility boundary: sevenDayPct == rateLimitPct (90) → NOT imminent (strict <)", () => {
+    expect(imminent({ sevenDayPct: 90 })).toBe(false);
+  });
+
+  it("7d just under the limit (89) with sound 5h → imminent (no 7d margin)", () => {
+    expect(imminent({ sevenDayPct: 89 })).toBe(true);
+  });
+
+  it("null fiveHourPct or sevenDayPct → NOT imminent", () => {
+    expect(imminent({ fiveHourPct: null })).toBe(false);
+    expect(imminent({ sevenDayPct: null })).toBe(false);
+  });
+
+  it("returns only the imminent subset across a mixed pool", () => {
+    const pool = [
+      poolAcct(1, { sevenDayResetsAt: at(23 * H) }), // imminent
+      poolAcct(2, { sevenDayResetsAt: at(48 * H) }), // resets too far out
+      poolAcct(3, { sevenDayResetsAt: at(1 * H), fiveHourPct: 95 }), // 5h over headroom
+      poolAcct(4, { sevenDayResetsAt: at(2 * H), sevenDayPct: 95 }), // 7d over limit
+    ];
+    expect([...computeImminent(pool, NOW_MS, RATE_LIMIT)].sort()).toEqual([1]);
   });
 });

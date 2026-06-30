@@ -98,6 +98,44 @@ function executeSwitch(
   return cswap.switch(); // "next" → plain rotation
 }
 
+/** 24h window (ms): a 7-day reset landing inside it is "soon" for the `reset-soon` strategy. */
+const RESET_SOON_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Headroom (percentage points below `rateLimitPct`) the SHORT 5-hour window must keep for an
+ * account to count as imminent. `reset-soon` funnels every new session onto the imminent account;
+ * the 5h window does NOT reset soon, so a near-limit funnel target would be driven straight into a
+ * 5h rate-limit (then unusable for up to 5h). The 7-day (resetting) window gets NO such margin —
+ * plain eligibility (`sevenDayPct < rateLimitPct`) — so an account with real 7d capacity still
+ * wins, and an over-limit one self-corrects via `classifyPool`'s `rateLimited` flag next refresh.
+ */
+const FIVE_HOUR_HEADROOM_PP = 10;
+
+/**
+ * Account numbers the `reset-soon` strategy should FAVOR: the 7-day window resets within 24h
+ * (future) AND still has capacity (`sevenDayPct < rateLimitPct`) AND the 5-hour window keeps
+ * `FIVE_HOUR_HEADROOM_PP` headroom below the limit. Pure — the clock is supplied as `nowMs` (epoch
+ * ms) and `Date.parse` of the stored ISO `resetsAt` is deterministic, so `selection.ts` stays
+ * Date-free. `null` pct, or an unparseable / past / `null` `resetsAt`, → not imminent.
+ */
+export function computeImminent(
+  pool: PoolAccount[],
+  nowMs: number,
+  rateLimitPct: number,
+): Set<number> {
+  const imminent = new Set<number>();
+  for (const a of pool) {
+    if (a.sevenDayResetsAt === null) continue;
+    const resetMs = Date.parse(a.sevenDayResetsAt);
+    if (!Number.isFinite(resetMs)) continue;
+    if (!(resetMs > nowMs && resetMs - nowMs < RESET_SOON_WINDOW_MS)) continue;
+    if (a.sevenDayPct === null || a.sevenDayPct >= rateLimitPct) continue;
+    if (a.fiveHourPct === null || a.fiveHourPct > rateLimitPct - FIVE_HOUR_HEADROOM_PP) continue;
+    imminent.add(a.number);
+  }
+  return imminent;
+}
+
 /**
  * Route an aux (review / plan-gate / doc) spawn without aborting, updating lastSpawn,
  * or touching history. Called from `onSpawn` when `kind !== "session"` AND `cfg.routeAuxQuota`
@@ -117,6 +155,7 @@ function auxSpawnPatch(
   ready: Set<number>,
   backupRoot: string,
   strategy: Strategy,
+  imminent: Set<number>,
 ): SpawnPatch | void {
   // review / plan-gate: keep the aux spawn on the parent session's account.
   if (d.parentSessionId !== undefined) {
@@ -131,7 +170,7 @@ function auxSpawnPatch(
   }
   // session-less aux (doc-agent / standalone critic): route to a pool account
   // EPHEMERALLY (no durable pin, no cursor persist); fall open if none eligible.
-  const result = assign(state, d.sessionId, pool, ready, strategy);
+  const result = assign(state, d.sessionId, pool, ready, strategy, imminent);
   if (result.kind === "assigned") {
     const acct = pool.find((a) => a.number === result.accountNumber);
     const email = acct?.email ?? "";
@@ -249,13 +288,32 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
     // prompt), so an operator on such a host MUST set `routeAuxQuota: false` (pass-through, the #25
     // behavior). Either way an aux spawn is NEVER aborted — a refused review is terminal (no
     // held-retry). See README (aux-spawn section) for the default-true override + version caveat.
+    // `reset-soon` reads the clock once here (keeping `assign` Date-free) and uses the same
+    // imminent set for the main spawn and any session-less aux route below.
+    const imminent = computeImminent(prewarmer.pool, Date.parse(now()), cfg.rateLimitPct);
+
     const kind = d.kind ?? "session";
     if (kind !== "session") {
       if (!cfg.routeAuxQuota) return; // pass-through: leave aux on the sandbox-bound active account
-      return auxSpawnPatch(d, state, prewarmer.pool, prewarmer.ready, backupRoot, cfg.strategy);
+      return auxSpawnPatch(
+        d,
+        state,
+        prewarmer.pool,
+        prewarmer.ready,
+        backupRoot,
+        cfg.strategy,
+        imminent,
+      );
     }
 
-    const result = assign(state, d.sessionId, prewarmer.pool, prewarmer.ready, cfg.strategy);
+    const result = assign(
+      state,
+      d.sessionId,
+      prewarmer.pool,
+      prewarmer.ready,
+      cfg.strategy,
+      imminent,
+    );
 
     if (result.kind === "assigned") {
       // Persist the pin + cursor durably BEFORE returning the patch (sync `state.set`).
