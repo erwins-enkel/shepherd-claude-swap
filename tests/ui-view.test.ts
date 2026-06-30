@@ -108,12 +108,6 @@ describe("buildUIView — required node types", () => {
     expect(types).toContain("badge");
   });
 
-  it("tree contains at least one table node", () => {
-    const v = buildUIView(cfg, pool, ready, baseState, lastSpawn, null);
-    const types = collectTypes(v.root);
-    expect(types).toContain("table");
-  });
-
   it("tree contains at least one key-value node", () => {
     const v = buildUIView(cfg, pool, ready, baseState, lastSpawn, null);
     const types = collectTypes(v.root);
@@ -235,41 +229,6 @@ describe("buildUIView — meter tones", () => {
     const v = buildUIView(cfg, noClockPool, new Set([6]), baseState, null, null);
     const captions = findByType(v.root, "meter").map((m) => m.props?.["caption"]);
     expect(captions).toContain("40%");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Assignments table
-// ---------------------------------------------------------------------------
-
-describe("buildUIView — assignments table", () => {
-  it("table rows match state.assignments", () => {
-    const v = buildUIView(cfg, pool, ready, baseState, lastSpawn, null);
-    const tables = findByType(v.root, "table");
-    expect(tables.length).toBeGreaterThan(0);
-    const rows = tables[0]?.props?.["rows"] as string[][];
-    expect(rows).toHaveLength(2);
-    const sessionIds = rows.map((r) => r[0]);
-    expect(sessionIds).toContain("session-abc");
-    expect(sessionIds).toContain("session-xyz");
-    const accountVals = rows.map((r) => r[1]);
-    expect(accountVals).toContain("#1");
-    expect(accountVals).toContain("#2");
-  });
-
-  it("empty assignments → table with empty rows", () => {
-    const emptyState: SelectionState = { cursor: 0, assignments: {} };
-    const v = buildUIView(cfg, pool, ready, emptyState, null, null);
-    const tables = findByType(v.root, "table");
-    const rows = tables[0]?.props?.["rows"] as unknown[];
-    expect(rows).toHaveLength(0);
-  });
-
-  it("table has columns Session and Account", () => {
-    const v = buildUIView(cfg, pool, ready, baseState, lastSpawn, null);
-    const tables = findByType(v.root, "table");
-    const cols = tables[0]?.props?.["columns"] as string[];
-    expect(cols).toEqual(["Session", "Account"]);
   });
 });
 
@@ -576,7 +535,7 @@ describe("buildUIView — new graphical node types", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildUIView — flat node types still present alongside graphical", () => {
-  it("contains stack, text, badge, meter, table, key-value, callout", () => {
+  it("contains stack, text, badge, meter, key-value, callout", () => {
     const h = new History();
     h.recordQuota(pool);
     const v = buildUIView(cfg, pool, ready, baseState, lastSpawn, "oops", h);
@@ -585,7 +544,6 @@ describe("buildUIView — flat node types still present alongside graphical", ()
     expect(types).toContain("text");
     expect(types).toContain("badge");
     expect(types).toContain("meter");
-    expect(types).toContain("table");
     expect(types).toContain("key-value");
     expect(types).toContain("callout");
   });
