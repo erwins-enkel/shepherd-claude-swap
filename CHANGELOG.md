@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.0](https://github.com/erwins-enkel/shepherd-claude-swap/compare/shepherd-claude-swap-v0.3.0...shepherd-claude-swap-v0.4.0) (2026-06-30)
+
+
+### Features
+
+* add reset-soon selection strategy ([#37](https://github.com/erwins-enkel/shepherd-claude-swap/issues/37)) ([fea9d14](https://github.com/erwins-enkel/shepherd-claude-swap/commit/fea9d14bd19618162b6e225c21c2ee84ceb3c444))
+* auto-heal launches a real Claude session against unavailable accounts ([#36](https://github.com/erwins-enkel/shepherd-claude-swap/issues/36)) ([3c87a17](https://github.com/erwins-enkel/shepherd-claude-swap/commit/3c87a170a60a83d636adc09830a66021a90b8033))
+* **ui-view:** drop raw session→account table; bar-chart covers share ([#34](https://github.com/erwins-enkel/shepherd-claude-swap/issues/34)) ([332595c](https://github.com/erwins-enkel/shepherd-claude-swap/commit/332595c28c98a4239c0477361446e1e2626e248e))
+
 ## [0.3.0](https://github.com/erwins-enkel/shepherd-claude-swap/compare/shepherd-claude-swap-v0.2.0...shepherd-claude-swap-v0.3.0) (2026-06-29)
 
 
