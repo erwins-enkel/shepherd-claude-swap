@@ -205,7 +205,7 @@ operator-triggered global switch is available out of band via `POST switch-prima
 (never called by the hot path).
 
 **Status panel:** Open Settings → Plugins in the Shepherd UI to see per-account 5h/7d quota,
-current session→account assignments, and the last spawn decision in real time. An account whose quota `cswap` cannot currently report shows a **quota unknown** badge instead of a misleading `0%` meter. The active ("primary") account shows a **primary** badge.
+current session→account assignments, and the last spawn decision in real time. An account whose quota `cswap` cannot currently report shows a **quota unknown** badge instead of a misleading `0%` meter. The active ("primary") account shows a **primary** badge. When the installed `cswap` reports per-model weekly limits (`usage.scoped`, unreleased as of claude-swap 0.16.0) — e.g. Fable — they appear as additional `<Model> wk` meters/gauges alongside the 5h/7d quota.
 
 **Make primary picker:** each eligible non-primary account row carries a **Make primary** button
 (a `publishUI` `action-button`) that POSTs `{ mode: "specific", account }` to the plugin's own

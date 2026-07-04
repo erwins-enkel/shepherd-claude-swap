@@ -171,6 +171,27 @@ describe("buildStatus — pool section", () => {
     expect(a1?.["fiveHourPct"]).toBe(10);
     expect(a1?.["sevenDayPct"]).toBe(20);
   });
+
+  it("pool entry 'scopedWindows' defaults to an empty array", () => {
+    const s = buildStatus(cfg, pool, ready, baseState, null, null, null, null);
+    const p = s["pool"] as Record<string, unknown>[];
+    const a1 = p.find((e) => e["number"] === 1);
+    expect(a1?.["scopedWindows"]).toEqual([]);
+  });
+
+  it("pool entry 'scopedWindows' carries a Fable-style window through as-is", () => {
+    const fableWindow = {
+      name: "Fable",
+      pct: 42,
+      resetsAt: "2026-07-06T00:00:00.000Z",
+      resetClock: "Sun 00:00",
+      resetCountdown: "2d",
+    };
+    const withFable = makeAccount(1, { scopedWindows: [fableWindow] });
+    const s = buildStatus(cfg, [withFable], new Set([1]), baseState, null, null, null, null);
+    const p = s["pool"] as Record<string, unknown>[];
+    expect(p[0]?.["scopedWindows"]).toEqual([fableWindow]);
+  });
 });
 
 // ---------------------------------------------------------------------------
