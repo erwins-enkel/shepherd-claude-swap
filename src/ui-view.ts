@@ -72,7 +72,9 @@ function canMakePrimary(acct: PoolAccount): boolean {
   return !acct.active && acct.usable && !acct.rateLimited;
 }
 
-/** Meters (5h + 7d) for an account with known quota, or the quota-unknown note. */
+/** Meters (5h + 7d + one per scoped weekly window, e.g. Fable) for an account with known
+ *  quota, or the quota-unknown note. Scoped-window tone is display-only — it never affects
+ *  account classification (that invariant lives in accounts.ts). */
 function buildAccountMeters(acct: PoolAccount, rateLimitPct: number): PluginUINode[] {
   if (acct.usageUnavailable) return [quotaUnknownNote(acct.active)];
   const fivePct = acct.fiveHourPct ?? 0;
@@ -108,6 +110,16 @@ function buildAccountMeters(acct: PoolAccount, rateLimitPct: number): PluginUINo
         tone: sevenPct >= rateLimitPct ? "error" : "ok",
       },
     },
+    ...acct.scopedWindows.map((w): PluginUINode => ({
+      type: "meter",
+      props: {
+        label: `#${acct.number} · ${w.name} wk`,
+        value: w.pct,
+        max: 100,
+        caption: quotaCaption(w.pct, w.resetClock, w.resetCountdown),
+        tone: w.pct >= rateLimitPct ? "error" : "ok",
+      },
+    })),
   ];
 }
 
@@ -139,7 +151,8 @@ function buildPoolAccountRow(
   };
 }
 
-/** Build the graphical section node for one account: gauges + sparkline, or unknown note. */
+/** Build the graphical section node for one account: gauges (5h + 7d + one per scoped weekly
+ *  window, e.g. Fable) + sparkline, or unknown note. */
 function buildGraphicsAccountNode(
   a: PoolAccount,
   rateLimitPct: number,
@@ -186,6 +199,16 @@ function buildGraphicsAccountNode(
           caption: sevenCaption,
         },
       },
+      ...a.scopedWindows.map((w): PluginUINode => ({
+        type: "gauge",
+        props: {
+          label: `#${a.number} · ${w.name} wk`,
+          value: w.pct,
+          max: 100,
+          tone: toneFor(w.pct),
+          caption: quotaCaption(w.pct, w.resetClock, w.resetCountdown),
+        },
+      })),
       {
         type: "sparkline",
         props: {
