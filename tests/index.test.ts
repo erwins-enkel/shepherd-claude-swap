@@ -1336,6 +1336,181 @@ describe("register — POST switch-primary", () => {
 });
 
 // ───────────────────────────────────────────────────────────────────────────
+// POST set-rotation
+// ───────────────────────────────────────────────────────────────────────────
+
+/** Build a POST set-rotation request with a JSON body. */
+function makeRotationReq(body: unknown): Request {
+  return new Request("http://x/set-rotation", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+const registerDeps = (runner: Runner, timers: ReturnType<typeof makeFakeTimers>): PluginDeps => ({
+  runner,
+  setInterval: timers.setIntervalFn,
+  clearInterval: timers.clearIntervalFn,
+  now,
+  existsSync: () => true,
+});
+
+interface RotationStats {
+  outOfRotation: number[];
+  pool: { number: number; usable: boolean; reason: string | null }[];
+}
+
+describe("register — POST set-rotation", () => {
+  it("inRotation:false takes an account out: persists set, reclassifies pool, refresh follows", async () => {
+    const { runner, calls } = makeFakeRunner({ prewarmOk: true });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, registerDeps(runner, timers));
+    const handler = fc.routes.get("POST set-rotation")!;
+    const statsHandler = fc.routes.get("GET stats")!;
+    const listBefore = calls.filter((c) => c.args[0] === "--list").length;
+
+    const res = await handler(makeRotationReq({ account: 2, inRotation: false }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, account: 2, inRotation: false });
+
+    // durable state persisted
+    expect(JSON.parse(fc.store.get("outOfRotation")!)).toEqual([2]);
+    // a follow-up --list (refresh) was issued
+    expect(calls.filter((c) => c.args[0] === "--list").length).toBeGreaterThan(listBefore);
+    // stats reflect the set + reclassified pool
+    const s = (await (await statsHandler(new Request("http://x/stats"))).json()) as RotationStats;
+    expect(s.outOfRotation).toEqual([2]);
+    const acct2 = s.pool.find((a) => a.number === 2)!;
+    expect(acct2.usable).toBe(false);
+    expect(acct2.reason).toBe("out-of-rotation");
+  });
+
+  it("inRotation:true returns a seeded-out account: clears from set, pool usable again", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx({ store: new Map([["outOfRotation", JSON.stringify([2])]]) });
+    await register(fc.ctx, registerDeps(runner, timers));
+    const handler = fc.routes.get("POST set-rotation")!;
+    const statsHandler = fc.routes.get("GET stats")!;
+
+    const before = (await (
+      await statsHandler(new Request("http://x/stats"))
+    ).json()) as RotationStats;
+    expect(before.pool.find((a) => a.number === 2)!.reason).toBe("out-of-rotation");
+
+    const res = await handler(makeRotationReq({ account: 2, inRotation: true }));
+    expect(res.status).toBe(200);
+    expect(JSON.parse(fc.store.get("outOfRotation")!)).toEqual([]);
+
+    const after = (await (
+      await statsHandler(new Request("http://x/stats"))
+    ).json()) as RotationStats;
+    expect(after.outOfRotation).toEqual([]);
+    const acct2 = after.pool.find((a) => a.number === 2)!;
+    expect(acct2.usable).toBe(true);
+    expect(acct2.reason).toBeNull();
+  });
+
+  it("seeds the out-of-rotation set from durable state on boot", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx({ store: new Map([["outOfRotation", JSON.stringify([2])]]) });
+    await register(fc.ctx, registerDeps(runner, timers));
+    const statsHandler = fc.routes.get("GET stats")!;
+    const s = (await (await statsHandler(new Request("http://x/stats"))).json()) as RotationStats;
+    expect(s.outOfRotation).toEqual([2]);
+    expect(s.pool.find((a) => a.number === 2)!.reason).toBe("out-of-rotation");
+  });
+
+  it("malformed persisted outOfRotation does not brick register (treated as empty)", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx({ store: new Map([["outOfRotation", JSON.stringify("garbage")]]) });
+    await register(fc.ctx, registerDeps(runner, timers)); // must not throw
+    const statsHandler = fc.routes.get("GET stats")!;
+    const s = (await (await statsHandler(new Request("http://x/stats"))).json()) as RotationStats;
+    expect(s.outOfRotation).toEqual([]);
+  });
+
+  it("coerces persisted entries on boot, dropping non-integers", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx({ store: new Map([["outOfRotation", JSON.stringify([2, "x", 3.5])]]) });
+    await register(fc.ctx, registerDeps(runner, timers));
+    const statsHandler = fc.routes.get("GET stats")!;
+    const s = (await (await statsHandler(new Request("http://x/stats"))).json()) as RotationStats;
+    expect(s.outOfRotation).toEqual([2]);
+  });
+
+  it("validation: a non-integer account → 400 and does not mutate the set", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, registerDeps(runner, timers));
+    const handler = fc.routes.get("POST set-rotation")!;
+    for (const account of [1.5, "2", Number.NaN]) {
+      const res = await handler(makeRotationReq({ account, inRotation: false }));
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { ok: boolean }).ok).toBe(false);
+    }
+    expect(fc.store.get("outOfRotation")).toBeUndefined();
+  });
+
+  it("validation: a non-boolean inRotation → 400", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, registerDeps(runner, timers));
+    const handler = fc.routes.get("POST set-rotation")!;
+    const res = await handler(makeRotationReq({ account: 2 }));
+    expect(res.status).toBe(400);
+  });
+
+  it("validation: invalid JSON body → 400", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, registerDeps(runner, timers));
+    const handler = fc.routes.get("POST set-rotation")!;
+    const res = await handler(
+      new Request("http://x/set-rotation", { method: "POST", body: "nope" }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects with 409 while a switch-primary is in-flight; does not mutate the set", async () => {
+    let resolveSwitch!: () => void;
+    const switchBlockOn = new Promise<void>((resolve) => {
+      resolveSwitch = resolve;
+    });
+    const { runner } = makeFakeRunner({ prewarmOk: true, switchBlockOn });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, registerDeps(runner, timers));
+    const switchHandler = fc.routes.get("POST switch-primary")!;
+    const rotationHandler = fc.routes.get("POST set-rotation")!;
+
+    // Start a switch that blocks past beginSwitch(), holding the lock.
+    const switchPromise = switchHandler(makeSwitchReq({ mode: "next" }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    const res = await rotationHandler(makeRotationReq({ account: 2, inRotation: false }));
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { ok: boolean }).ok).toBe(false);
+    // Rejected request must not have mutated the durable set.
+    expect(fc.store.get("outOfRotation")).toBeUndefined();
+
+    // First switch completes; lock releases; a set-rotation now succeeds.
+    resolveSwitch();
+    expect((await switchPromise).status).toBe(200);
+    const ok = await rotationHandler(makeRotationReq({ account: 2, inRotation: false }));
+    expect(ok.status).toBe(200);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
 // Aux-spawn routing (review / plan-gate / doc) — shepherd#1205 fix
 // ───────────────────────────────────────────────────────────────────────────
 

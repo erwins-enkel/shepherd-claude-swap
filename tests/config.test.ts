@@ -16,6 +16,7 @@ describe("parseConfig", () => {
         bootWarmTimeoutMs: 30000,
         abortOnEmpty: true,
         makePrimaryButtons: true,
+        rotationButtons: true,
         routeAuxQuota: true,
         autoHeal: true,
         autoHealAfterCycles: 2,
@@ -82,6 +83,18 @@ describe("parseConfig", () => {
 
     it("accepts makePrimaryButtons: true explicitly", () => {
       expect(parseConfig({ makePrimaryButtons: true }).makePrimaryButtons).toBe(true);
+    });
+
+    it("defaults rotationButtons to true", () => {
+      expect(parseConfig({}).rotationButtons).toBe(true);
+    });
+
+    it("accepts rotationButtons: false", () => {
+      expect(parseConfig({ rotationButtons: false }).rotationButtons).toBe(false);
+    });
+
+    it("accepts rotationButtons: true explicitly", () => {
+      expect(parseConfig({ rotationButtons: true }).rotationButtons).toBe(true);
     });
 
     it("defaults routeAuxQuota to true", () => {
@@ -264,6 +277,20 @@ describe("parseConfig", () => {
 
     it("throws if makePrimaryButtons is null", () => {
       expect(() => parseConfig({ makePrimaryButtons: null })).toThrow();
+    });
+  });
+
+  describe("validation — rotationButtons", () => {
+    it("throws if rotationButtons is a string", () => {
+      expect(() => parseConfig({ rotationButtons: "true" })).toThrow();
+    });
+
+    it("throws if rotationButtons is a number", () => {
+      expect(() => parseConfig({ rotationButtons: 1 })).toThrow();
+    });
+
+    it("throws if rotationButtons is null", () => {
+      expect(() => parseConfig({ rotationButtons: null })).toThrow();
     });
   });
 

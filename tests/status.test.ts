@@ -73,6 +73,14 @@ describe("buildStatus — required keys", () => {
     const s = buildStatus(cfg, pool, ready, baseState, null, null, null, null);
     expect(s).toHaveProperty("lastSpawn");
   });
+
+  it("outOfRotation defaults to [] and reflects the set (sorted ascending)", () => {
+    expect(buildStatus(cfg, pool, ready, baseState, null, null, null, null).outOfRotation).toEqual(
+      [],
+    );
+    const s = buildStatus(cfg, pool, ready, baseState, null, null, null, null, new Set([3, 1]));
+    expect(s.outOfRotation).toEqual([1, 3]);
+  });
 });
 
 // ---------------------------------------------------------------------------

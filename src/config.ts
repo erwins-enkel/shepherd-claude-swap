@@ -11,6 +11,7 @@ export interface ResolvedConfig {
   bootWarmTimeoutMs: number;
   abortOnEmpty: boolean;
   makePrimaryButtons: boolean;
+  rotationButtons: boolean;
   routeAuxQuota: boolean;
   autoHeal: boolean;
   autoHealAfterCycles: number;
@@ -128,6 +129,15 @@ export function parseConfig(raw: Record<string, unknown>): ResolvedConfig {
     );
   }
 
+  // rotationButtons — gate the per-account "Take out of rotation" / "Return to rotation"
+  // action-buttons in the panel. Like makePrimaryButtons, requires a host whose publishUI renderer
+  // includes `action-button` (shepherd#1209/#1210); kept a separate flag so the two action-button
+  // features can be toggled independently. Set false on an older host to fall back to badge-only.
+  const rotationButtons = "rotationButtons" in raw ? raw["rotationButtons"] : true;
+  if (typeof rotationButtons !== "boolean") {
+    throw new Error(`rotationButtons: expected boolean, got ${JSON.stringify(rotationButtons)}`);
+  }
+
   // routeAuxQuota — gate aux-spawn (review / plan-gate / doc) credential routing onto a pool
   // account. Default true assumes a host whose reviewer sandbox binds a plugin-patched
   // credentialDir (shepherd#1217+); on an older host the routed dir is never mounted, so the
@@ -194,6 +204,7 @@ export function parseConfig(raw: Record<string, unknown>): ResolvedConfig {
     bootWarmTimeoutMs,
     abortOnEmpty,
     makePrimaryButtons,
+    rotationButtons,
     routeAuxQuota,
     autoHeal,
     autoHealAfterCycles,

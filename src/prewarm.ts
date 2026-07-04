@@ -36,6 +36,10 @@ export interface PrewarmerDeps {
   onChange?: () => void;
   /** Injectable fs-exists check (warm-time only, never on the hot path). Default `fs.existsSync`. */
   existsSync?: (path: string) => boolean;
+  /** Runtime out-of-rotation set (operator toggle), shared BY REFERENCE with the owner (index.ts):
+   *  the route mutates this same object, so `refresh()` classification and `inScope` observe toggles
+   *  immediately. Default: a fresh empty set (nothing taken out). */
+  outOfRotation?: Set<number>;
   /** Timestamp source for heal records. Default `() => new Date().toISOString()`. */
   now?: () => string;
   /** Called when a restore (switch back to the prior primary) is determined to have failed. */
@@ -74,6 +78,8 @@ export class Prewarmer {
   private readonly backupRoot: string;
   private readonly onChange?: () => void;
   private readonly existsSync: (path: string) => boolean;
+  /** Shared-by-reference runtime out-of-rotation set (see PrewarmerDeps.outOfRotation). */
+  private readonly outOfRotation: Set<number>;
   private readonly now: () => string;
   private readonly onRestoreFailure?: (info: HealRestoreFailure) => void;
   private readonly onRestoreRecovered?: () => void;
@@ -96,6 +102,7 @@ export class Prewarmer {
     this.backupRoot = deps.backupRoot;
     this.onChange = deps.onChange;
     this.existsSync = deps.existsSync ?? fsExistsSync;
+    this.outOfRotation = deps.outOfRotation ?? new Set();
     this.now = deps.now ?? (() => new Date().toISOString());
     this.onRestoreFailure = deps.onRestoreFailure;
     this.onRestoreRecovered = deps.onRestoreRecovered;
@@ -110,7 +117,7 @@ export class Prewarmer {
   async refresh(): Promise<void> {
     try {
       const list = await this.cswap.list();
-      this.pool = classifyPool(list, this.cfg);
+      this.pool = classifyPool(list, this.cfg, this.outOfRotation);
       for (const n of [...this.ready]) {
         if (isUnassignable(this.pool.find((a) => a.number === n))) {
           this.ready.delete(n);
@@ -205,10 +212,14 @@ export class Prewarmer {
     return this.switching;
   }
 
-  /** Is account `n` in scope for prewarm/heal (honors include/exclude slot config)? */
+  /** Is account `n` in scope for prewarm/heal (honors include/exclude slot config AND the runtime
+   *  out-of-rotation set)? The out-of-rotation check is separate from classification because a
+   *  taken-out account whose usageStatus is non-ok keeps its `unavailable` reason (classifyPool
+   *  short-circuits before the out-of-rotation branch), yet must still never be a heal target. */
   private inScope(n: number): boolean {
     return (
       !this.cfg.excludeSlots.includes(n) &&
+      !this.outOfRotation.has(n) &&
       (this.cfg.includeSlots === null || this.cfg.includeSlots.includes(n))
     );
   }

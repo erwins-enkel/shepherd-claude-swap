@@ -25,6 +25,7 @@ export function buildStatus(
   lastError: string | null,
   lastHeal: HealRecord | null,
   restoreFailure: HealRestoreFailure | null,
+  outOfRotation: Set<number> = new Set(),
 ): Record<string, unknown> {
   return {
     config: {
@@ -61,5 +62,7 @@ export function buildStatus(
     lastError: lastError,
     lastHeal: lastHeal,
     restoreFailure: restoreFailure,
+    // Runtime out-of-rotation set (operator toggle). Ascending for stable output.
+    outOfRotation: [...outOfRotation].sort((a, b) => a - b),
   };
 }

@@ -83,6 +83,7 @@ All fields are optional — the shipped `config.json` sets every default explici
 | `bootWarmTimeoutMs`   | `number`                                        | `30000`         | Max time (ms) the plugin waits for ≥1 account to become ready at boot before unblocking HTTP.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `abortOnEmpty`        | `boolean`                                       | `true`          | Refuse spawns (`ctx.abortSpawn`) when no usable account is available — Shepherd then holds and retries a refused create (no task loss) and hard-blocks a non-forced resume. Set `false` to fail-open (not recommended).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `makePrimaryButtons`  | `boolean`                                       | `true`          | Show a per-account **Make primary** `action-button` in the panel (see _Make primary picker_ below). Requires a host whose `publishUI` renderer includes `action-button` (shepherd#1209/#1210). Set `false` on an older host to fall back to badge-only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `rotationButtons`     | `boolean`                                       | `true`          | Show per-account **Take out of rotation** / **Return to rotation** `action-button`s in the panel (see _Out-of-rotation toggle_ below). Same host requirement as `makePrimaryButtons` (`action-button` renderer, shepherd#1209/#1210); a separate flag so the two toggle independently. Set `false` on an older host to fall back to badge-only.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `routeAuxQuota`       | `boolean`                                       | `true`          | Route aux spawns (review / plan-gate / doc) onto a pool account (see _Aux spawns_ below). **Requires a Shepherd release containing shepherd#1217**, which binds the routed `credentialDir` into the reviewer sandbox. ⚠️ #1217 is **not yet in a shipped release** (latest v1.38.0 predates it), so on any host without it you **must** set `false` or routed reviewers run **unauthenticated** (re-login + theme prompt). Default `true` is a deliberate choice; the opt-out is annotated in `config.json`.                                                                                                                                                                                                                                                                                  |
 | `autoHeal`            | `boolean`                                       | `true`          | Auto-revive non-active accounts that cswap transiently reports as `usageStatus: "unavailable"` (a usage-fetch failure, not a real auth fault), by switching the primary to the stuck account, launching a real Claude session against it, and switching back. Set `false` to disable.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `autoHealAfterCycles` | `number`                                        | `2`             | Consecutive `--list` refreshes an account must stay `unavailable` before a heal is attempted. Higher = more conservative (waits out transient blips).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -225,6 +226,31 @@ This picker requires a host whose `publishUI` renderer includes the `action-butt
 `"makePrimaryButtons": false` in `config.json` to fall back to the badge-only view (otherwise those
 rows render as placeholder tiles).
 
+**Out-of-rotation toggle:** each account row also carries a rotation control — a **Take out of
+rotation** button (on any non-primary account) or a **Return to rotation** button (on an account
+already held out). It POSTs to the plugin's own `set-rotation` route (see below) and re-publishes
+the panel, so you can hold an account out of the pool — or put it back — without editing
+`excludeSlots` in `config.json` and restarting. The held set is **persisted** (durable plugin
+state), so it survives a plugin restart, and is **independent of** the static `excludeSlots` config.
+
+Taking an account out is the runtime equivalent of `excludeSlots`: it becomes `usable:false,
+reason:"out-of-rotation"`, so new sessions skip it, a resume pinned to it aborts (already-running
+agents keep their credentials and are unaffected), and it is never warmed or auto-healed. **Take out
+of rotation** is offered for any non-primary account (including rate-limited / quota-unknown /
+unavailable ones, so you can pre-emptively hold out a recovering account); the active primary shows
+no button (it is already outside the pool). A **Take out** click asks for confirmation (it can abort
+a pinned resume); **Return to rotation** is additive, so it does not.
+
+An account that is **both** statically config-excluded (`excludeSlots` / not in `includeSlots`) and
+in the runtime held-out set shows **neither** button — config exclusion is the higher-order lever.
+Consequence: while an account is config-excluded you can't clear its out-of-rotation flag from the
+UI; remove the config exclusion first and the **Return to rotation** button reappears. (The stale
+flag is harmless — the account is unusable regardless.)
+
+Like the Make-primary picker, this requires the host `action-button` renderer and is gated by
+`rotationButtons` (default `true`); set `"rotationButtons": false` on an older host to fall back to
+the badge-only view.
+
 **Gear menu:** On Shepherd ≥ 1.39.0 the plugin also contributes a **Claude swap usage** entry to
 the top-bar gear menu (desktop dropdown + mobile sheet). Clicking it opens Settings → Plugins
 scrolled to this plugin's card — the same usage view described above, one click away. On older
@@ -241,7 +267,7 @@ in shepherd #1189). Chart spans cover up to `288 × refreshIntervalMs` of histor
 
 ## HTTP routes
 
-Both routes require operator auth (Shepherd's standard plugin route auth).
+All routes require operator auth (Shepherd's standard plugin route auth).
 
 ### `GET /api/plugins/claude-swap/stats`
 
@@ -266,7 +292,8 @@ Returns the current pool state and session assignments as JSON:
   "cursor": 1,
   "lastSpawn": { "sessionId": "...", "accountNumber": 1, "credentialDir": "...", "at": "..." },
   "lastHeal": { "target": 2, "outcome": "healed", "restoreFailed": false, "at": "..." },
-  "restoreFailure": null
+  "restoreFailure": null,
+  "outOfRotation": [3]
 }
 ```
 
@@ -311,6 +338,37 @@ curl -s -X POST -H "Authorization: Bearer $SHEPHERD_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"mode":"best"}' \
   http://localhost:<port>/api/plugins/claude-swap/switch-primary | jq .
+```
+
+### `POST /api/plugins/claude-swap/set-rotation`
+
+Takes an account **out of rotation** or **returns it** — the runtime equivalent of `excludeSlots`,
+persisted in durable plugin state (survives restart). Operator-triggered only; never on the spawn
+hot path. Backs the panel's _Out-of-rotation toggle_. The held-out set is reported by `GET stats`
+as `outOfRotation` and per-account as `reason: "out-of-rotation"`.
+
+Body: `{ "account": <number>, "inRotation": <boolean> }` — a declarative, idempotent desired state.
+
+- `inRotation: false` — take the account out. It becomes `usable:false, reason:"out-of-rotation"`;
+  new sessions skip it, a resume pinned to it aborts, and it is not warmed/healed.
+- `inRotation: true` — return the account; it is re-warmed in the background and rejoins the pool.
+
+The route takes the same switch lock as `switch-primary`, so it returns `409` if a primary switch is
+in progress (and vice-versa) — the two never run concurrently.
+
+Responses:
+
+- `200 { "ok": true, "account": <number>, "inRotation": <boolean> }` — applied.
+- `400 { "ok": false, "error": … }` — malformed JSON, `account` not a finite integer, or
+  `inRotation` not a boolean.
+- `409 { "ok": false, "error": … }` — a primary switch is in progress; retry shortly.
+- `500 { "ok": false, "error": … }` — persisting/refreshing failed.
+
+```sh
+curl -s -X POST -H "Authorization: Bearer $SHEPHERD_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"account":3,"inRotation":false}' \
+  http://localhost:<port>/api/plugins/claude-swap/set-rotation | jq .
 ```
 
 ---
