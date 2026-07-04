@@ -24,6 +24,7 @@ function makeAccount(number: number, opts: Partial<PoolAccount> = {}): PoolAccou
     sevenDayResetCountdown: null,
     active: true,
     usageUnavailable: false,
+    scopedWindows: [],
     ...opts,
   };
 }

@@ -29,6 +29,7 @@ function makeAccount(number: number, opts: Partial<PoolAccount> = {}): PoolAccou
     sevenDayResetCountdown: null,
     active: true,
     usageUnavailable: false,
+    scopedWindows: [],
     ...opts,
   };
 }
@@ -864,6 +865,100 @@ describe("buildUIView — Make primary picker", () => {
   it("emits no action-button anywhere when makePrimaryButtons is false (pre-#1209 escape hatch)", () => {
     const v = buildUIView(cfgButtonsOff, pickerPool, pickerReady, baseState, null, null);
     expect(findByType(v.root, "action-button").length).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scoped weekly windows (Fable etc.)
+// ---------------------------------------------------------------------------
+
+describe("buildUIView — scoped weekly windows", () => {
+  const emptyState: SelectionState = { cursor: 0, assignments: {} };
+
+  it("scoped window renders a pool meter and a matching Graphics gauge with label/value/caption", () => {
+    const scopedPool = [
+      makeAccount(1, {
+        scopedWindows: [
+          {
+            name: "Fable",
+            pct: 39,
+            resetsAt: "2026-07-08T08:59:00.000Z",
+            resetClock: "Jul 8 08:59",
+            resetCountdown: "3d 22h",
+          },
+        ],
+      }),
+    ];
+    const v = buildUIView(cfg, scopedPool, new Set([1]), emptyState, null, null);
+    const meter = findByType(v.root, "meter").find((m) => m.props?.["label"] === "#1 · Fable wk");
+    expect(meter).toBeTruthy();
+    expect(meter?.props?.["value"]).toBe(39);
+    expect(meter?.props?.["max"]).toBe(100);
+    expect(meter?.props?.["caption"]).toBe("39% · resets Jul 8 08:59 (3d 22h)");
+
+    const gauge = findByType(v.root, "gauge").find((g) => g.props?.["label"] === "#1 · Fable wk");
+    expect(gauge).toBeTruthy();
+    expect(gauge?.props?.["value"]).toBe(39);
+    expect(gauge?.props?.["max"]).toBe(100);
+    expect(gauge?.props?.["caption"]).toBe("39% · resets Jul 8 08:59 (3d 22h)");
+  });
+
+  it("scoped window with null clock/countdown renders caption as bare pct", () => {
+    const scopedPool = [
+      makeAccount(2, {
+        scopedWindows: [
+          { name: "Fable", pct: 39, resetsAt: null, resetClock: null, resetCountdown: null },
+        ],
+      }),
+    ];
+    const v = buildUIView(cfg, scopedPool, new Set([2]), emptyState, null, null);
+    const meter = findByType(v.root, "meter").find((m) => m.props?.["label"] === "#2 · Fable wk");
+    expect(meter?.props?.["caption"]).toBe("39%");
+    const gauge = findByType(v.root, "gauge").find((g) => g.props?.["label"] === "#2 · Fable wk");
+    expect(gauge?.props?.["caption"]).toBe("39%");
+  });
+
+  it("scoped window pct >= rateLimitPct gets tone error; below gets tone ok", () => {
+    const scopedPool = [
+      makeAccount(3, {
+        scopedWindows: [
+          { name: "Fable", pct: 85, resetsAt: null, resetClock: null, resetCountdown: null },
+        ],
+      }),
+      makeAccount(4, {
+        scopedWindows: [
+          { name: "Fable", pct: 10, resetsAt: null, resetClock: null, resetCountdown: null },
+        ],
+      }),
+    ];
+    const v = buildUIView(cfgWith80Pct, scopedPool, new Set([3, 4]), emptyState, null, null);
+    const meterHigh = findByType(v.root, "meter").find(
+      (m) => m.props?.["label"] === "#3 · Fable wk",
+    );
+    expect(meterHigh?.props?.["tone"]).toBe("error");
+    const meterLow = findByType(v.root, "meter").find(
+      (m) => m.props?.["label"] === "#4 · Fable wk",
+    );
+    expect(meterLow?.props?.["tone"]).toBe("ok");
+
+    const gaugeHigh = findByType(v.root, "gauge").find(
+      (g) => g.props?.["label"] === "#3 · Fable wk",
+    );
+    expect(gaugeHigh?.props?.["tone"]).toBe("error");
+    const gaugeLow = findByType(v.root, "gauge").find(
+      (g) => g.props?.["label"] === "#4 · Fable wk",
+    );
+    expect(gaugeLow?.props?.["tone"]).toBe("ok");
+  });
+
+  it("empty scopedWindows renders identical node tree to before this change (no extra meters/gauges)", () => {
+    const v = buildUIView(cfg, [makeAccount(1)], new Set([1]), emptyState, null, null);
+    const meters = findByType(v.root, "meter");
+    expect(meters.length).toBe(2); // 5h + 7d only
+    expect(meters.map((m) => m.props?.["label"])).toEqual(["#1 · 5h", "#1 · 7d"]);
+    const gauges = findByType(v.root, "gauge");
+    expect(gauges.length).toBe(2);
+    expect(gauges.map((g) => g.props?.["label"])).toEqual(["#1 · 5h", "#1 · 7d"]);
   });
 });
 

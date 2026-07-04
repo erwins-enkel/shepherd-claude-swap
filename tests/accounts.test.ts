@@ -263,3 +263,133 @@ describe("classifyPool — empty accounts list", () => {
     expect(pool).toHaveLength(0);
   });
 });
+
+describe("classifyPool — scopedWindows", () => {
+  it("normalizes usage.scoped into scopedWindows (name/pct carried, missing fields null)", () => {
+    const list: CswapListResult = {
+      schemaVersion: 1,
+      accounts: [
+        {
+          number: 1,
+          email: "a@b.com",
+          active: true,
+          usageStatus: "ok",
+          usage: {
+            fiveHour: { pct: 10 },
+            scoped: [{ name: "Fable", pct: 42 }],
+          },
+        },
+      ],
+    };
+    const pool = classifyPool(list, parseConfig({}));
+    expect(pool[0]!.scopedWindows).toEqual([
+      {
+        name: "Fable",
+        pct: 42,
+        resetsAt: null,
+        resetClock: null,
+        resetCountdown: null,
+      },
+    ]);
+  });
+
+  it("carries resetsAt/clock/countdown when present on a scoped window", () => {
+    const list: CswapListResult = {
+      schemaVersion: 1,
+      accounts: [
+        {
+          number: 1,
+          email: "a@b.com",
+          active: true,
+          usageStatus: "ok",
+          usage: {
+            scoped: [
+              {
+                name: "Fable",
+                pct: 42,
+                resetsAt: "2026-07-04T15:00:00.277447+00:00",
+                clock: "Jul 4 17:00",
+                countdown: "6d 20h",
+              },
+            ],
+          },
+        },
+      ],
+    };
+    const pool = classifyPool(list, parseConfig({}));
+    expect(pool[0]!.scopedWindows[0]!.resetsAt).toBe("2026-07-04T15:00:00.277447+00:00");
+    expect(pool[0]!.scopedWindows[0]!.resetClock).toBe("Jul 4 17:00");
+    expect(pool[0]!.scopedWindows[0]!.resetCountdown).toBe("6d 20h");
+  });
+
+  it("scoped absent → scopedWindows: [] on the usable branch", () => {
+    const list: CswapListResult = {
+      schemaVersion: 1,
+      accounts: [
+        {
+          number: 1,
+          email: "a@b.com",
+          active: true,
+          usageStatus: "ok",
+          usage: { fiveHour: { pct: 1 } },
+        },
+      ],
+    };
+    const pool = classifyPool(list, parseConfig({}));
+    expect(pool[0]!.scopedWindows).toEqual([]);
+  });
+
+  it("scoped absent → scopedWindows: [] on the non-ok usageStatus branch", () => {
+    const list: CswapListResult = {
+      schemaVersion: 1,
+      accounts: [
+        { number: 1, email: "a@b.com", active: false, usageStatus: "api_key", usage: null },
+      ],
+    };
+    const pool = classifyPool(list, parseConfig({}));
+    expect(pool[0]!.scopedWindows).toEqual([]);
+  });
+
+  it("scoped absent → scopedWindows: [] on the excluded-slot branch", () => {
+    const list: CswapListResult = {
+      schemaVersion: 1,
+      accounts: [
+        {
+          number: 1,
+          email: "a@b.com",
+          active: true,
+          usageStatus: "ok",
+          usage: { fiveHour: { pct: 1 } },
+        },
+      ],
+    };
+    const pool = classifyPool(list, parseConfig({ excludeSlots: [1] }));
+    expect(pool[0]!.scopedWindows).toEqual([]);
+  });
+
+  it("scoped present but pct=100 has NO effect on usable/rateLimited/usageUnavailable (display-only)", () => {
+    const list: CswapListResult = {
+      schemaVersion: 1,
+      accounts: [
+        {
+          number: 1,
+          email: "a@b.com",
+          active: true,
+          usageStatus: "ok",
+          usage: {
+            fiveHour: { pct: 10 },
+            sevenDay: { pct: 20 },
+            scoped: [{ name: "Fable", pct: 100 }],
+          },
+        },
+      ],
+    };
+    const pool = classifyPool(list, parseConfig({ rateLimitPct: 90 }));
+    expect(pool[0]!.usable).toBe(true);
+    expect(pool[0]!.rateLimited).toBe(false);
+    expect(pool[0]!.usageUnavailable).toBe(false);
+    expect(pool[0]!.scopedWindows).toEqual([
+      { name: "Fable", pct: 100, resetsAt: null, resetClock: null, resetCountdown: null },
+    ]);
+  });
+});

@@ -53,6 +53,7 @@ export function buildStatus(
       active: acct.active,
       ready: ready.has(acct.number),
       usageUnavailable: acct.usageUnavailable,
+      scopedWindows: acct.scopedWindows,
     })),
     assignments: state.assignments,
     cursor: state.cursor,
