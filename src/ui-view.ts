@@ -72,6 +72,66 @@ function canMakePrimary(acct: PoolAccount): boolean {
   return !acct.active && acct.usable && !acct.rateLimited;
 }
 
+/** Whether an account is excluded by STATIC config (`excludeSlots` / `includeSlots`). Decided
+ *  directly from `cfg`, NOT from `PoolAccount.reason`: `classifyPool` short-circuits on non-ok
+ *  usageStatus before the exclude branches, so a config-excluded account that is also unavailable
+ *  carries `reason:"unavailable"`. Config exclusion is the permanent, higher-order lever, so such a
+ *  row gets NEITHER rotation button (mirrors classifyPool's `excluded-slot`-over-out-of-rotation
+ *  ranking). Consequence: while config-excluded, an out-of-rotation flag can't be cleared from the
+ *  UI — the operator must remove the config exclusion first. */
+function isConfigExcluded(cfg: ResolvedConfig, accountNumber: number): boolean {
+  return (
+    cfg.excludeSlots.includes(accountNumber) ||
+    (cfg.includeSlots !== null && !cfg.includeSlots.includes(accountNumber))
+  );
+}
+
+/** Per-account "Take out of rotation" action-button: POSTs `{ account, inRotation:false }` to the
+ *  plugin's `set-rotation` route (host-resolved under `/api/plugins/claude-swap/`). Confirmed before
+ *  POST because taking an account out aborts resumes pinned to it. */
+function takeOutOfRotationButton(acct: PoolAccount): PluginUINode {
+  return {
+    type: "action-button",
+    props: {
+      label: "Take out of rotation",
+      tone: "warn",
+      route: { method: "POST", path: "set-rotation" },
+      body: { account: acct.number, inRotation: false },
+      confirm: "Take this account out of rotation?",
+    },
+  };
+}
+
+/** Per-account "Return to rotation" action-button: POSTs `{ account, inRotation:true }`. Purely
+ *  additive (re-includes the account), so no confirm dialog. */
+function returnToRotationButton(acct: PoolAccount): PluginUINode {
+  return {
+    type: "action-button",
+    props: {
+      label: "Return to rotation",
+      tone: "ok",
+      route: { method: "POST", path: "set-rotation" },
+      body: { account: acct.number, inRotation: true },
+    },
+  };
+}
+
+/** The rotation toggle button for one account, or null when none applies. Gated by
+ *  `cfg.rotationButtons` (host `action-button` support). Config-excluded accounts get none;
+ *  a set member gets "Return to rotation"; any other non-active account gets "Take out of rotation";
+ *  the active account gets none (it is already outside the rotation pool). */
+function rotationButtonFor(
+  acct: PoolAccount,
+  cfg: ResolvedConfig,
+  outOfRotation: Set<number>,
+): PluginUINode | null {
+  if (!cfg.rotationButtons) return null;
+  if (isConfigExcluded(cfg, acct.number)) return null;
+  if (outOfRotation.has(acct.number)) return returnToRotationButton(acct);
+  if (!acct.active) return takeOutOfRotationButton(acct);
+  return null;
+}
+
 /** Meters (5h + 7d + one per scoped weekly window, e.g. Fable) for an account with known
  *  quota, or the quota-unknown note. Scoped-window tone is display-only — it never affects
  *  account classification (that invariant lives in accounts.ts). */
@@ -125,18 +185,21 @@ function buildAccountMeters(acct: PoolAccount, rateLimitPct: number): PluginUINo
 
 /** Build the flat pool row for one account: identity + status badge + meters or unknown note.
  *  When `showMakePrimary` is on (config flag) and the account is an eligible target, the header
- *  also carries a "Make primary" action-button. */
+ *  also carries a "Make primary" action-button. `rotationButton`, when non-null, is the account's
+ *  rotation toggle (already gated/decided by `rotationButtonFor`). */
 function buildPoolAccountRow(
   acct: PoolAccount,
   isReady: boolean,
   rateLimitPct: number,
   showMakePrimary: boolean,
+  rotationButton: PluginUINode | null,
 ): PluginUINode {
   const header: PluginUINode[] = [
     identityBadge(acct.number, acct.email),
     buildStatusBadge(acct, isReady),
   ];
   if (showMakePrimary && canMakePrimary(acct)) header.push(makePrimaryButton(acct));
+  if (rotationButton !== null) header.push(rotationButton);
   return {
     type: "stack",
     props: { direction: "vertical", gap: "sm" },
@@ -284,6 +347,7 @@ export function buildUIView(
   history: History = new History(),
   lastHeal: HealRecord | null = null,
   restoreFailure: HealRestoreFailure | null = null,
+  outOfRotation: Set<number> = new Set(),
 ): PluginUIView {
   const nodes: PluginUINode[] = [];
 
@@ -297,6 +361,7 @@ export function buildUIView(
         { key: "refreshIntervalMs", value: String(cfg.refreshIntervalMs) },
         { key: "abortOnEmpty", value: String(cfg.abortOnEmpty) },
         { key: "makePrimaryButtons", value: String(cfg.makePrimaryButtons) },
+        { key: "rotationButtons", value: String(cfg.rotationButtons) },
         { key: "autoHeal", value: String(cfg.autoHeal) },
         { key: "autoHealAfterCycles", value: String(cfg.autoHealAfterCycles) },
       ],
@@ -312,7 +377,13 @@ export function buildUIView(
     const detailed = pool.slice(0, MAX_DETAILED_ACCOUNTS);
     for (const acct of detailed) {
       nodes.push(
-        buildPoolAccountRow(acct, ready.has(acct.number), cfg.rateLimitPct, cfg.makePrimaryButtons),
+        buildPoolAccountRow(
+          acct,
+          ready.has(acct.number),
+          cfg.rateLimitPct,
+          cfg.makePrimaryButtons,
+          rotationButtonFor(acct, cfg, outOfRotation),
+        ),
       );
     }
     if (pool.length > MAX_DETAILED_ACCOUNTS) {

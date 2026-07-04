@@ -34,8 +34,17 @@ export interface PoolAccount {
  * Classify every account row from a --list result into the pool, honoring config.
  * api_key/token_expired/no_credentials/unavailable → usable:false with reason.
  * include/exclude slots filter membership.
+ *
+ * `outOfRotation` is the runtime, operator-driven exclusion set (durable, seeded from plugin
+ * state — the UI "Take out of rotation" toggle). It is applied AFTER the static `excludeSlots`
+ * branch, so a config-excluded account keeps its more-specific `excluded-slot` reason; a member of
+ * this set is marked `usable:false, reason:"out-of-rotation"`, mirroring `excluded-slot` exactly.
  */
-export function classifyPool(list: CswapListResult, cfg: ResolvedConfig): PoolAccount[] {
+export function classifyPool(
+  list: CswapListResult,
+  cfg: ResolvedConfig,
+  outOfRotation: Set<number> = new Set(),
+): PoolAccount[] {
   return list.accounts.map((acct) => {
     const fiveHourPct = acct.usage?.fiveHour?.pct ?? null;
     const sevenDayPct = acct.usage?.sevenDay?.pct ?? null;
@@ -80,6 +89,24 @@ export function classifyPool(list: CswapListResult, cfg: ResolvedConfig): PoolAc
         usable: false,
         rateLimited: false,
         reason: "excluded-slot",
+        fiveHourPct,
+        sevenDayPct,
+        ...resetFields,
+        active: acct.active,
+        usageUnavailable: false,
+        scopedWindows,
+      };
+    }
+
+    // Taken out of rotation at runtime (operator toggle). Applied after excludeSlots so a
+    // config-excluded account keeps its `excluded-slot` reason.
+    if (outOfRotation.has(acct.number)) {
+      return {
+        number: acct.number,
+        email: acct.email,
+        usable: false,
+        rateLimited: false,
+        reason: "out-of-rotation",
         fiveHourPct,
         sevenDayPct,
         ...resetFields,

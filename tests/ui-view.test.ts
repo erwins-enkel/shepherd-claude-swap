@@ -794,7 +794,14 @@ describe("buildUIView — empty history", () => {
 // "Make primary" action-button picker (issue #21)
 // ---------------------------------------------------------------------------
 
-const cfgButtonsOff = parseConfig({ makePrimaryButtons: false });
+// Both action-button features gate the same host capability; "pre-#1209 host" turns both off.
+const cfgButtonsOff = parseConfig({ makePrimaryButtons: false, rotationButtons: false });
+
+/** action-button nodes whose label matches (used to isolate one feature's buttons from another's,
+ *  since Make-primary and rotation toggles both render as `action-button`). */
+function buttonsByLabel(root: PluginUINode, label: string): PluginUINode[] {
+  return findByType(root, "action-button").filter((b) => b.props?.["label"] === label);
+}
 
 // Mixed pool exercising every eligibility branch.
 const pickerPool: PoolAccount[] = [
@@ -811,26 +818,29 @@ const pickerPool: PoolAccount[] = [
 ];
 const pickerReady = new Set([2]);
 
+// Make-primary-only config: rotation buttons off so this picker's buttons are isolated.
+const cfgMakePrimaryOnly = parseConfig({ rotationButtons: false });
+
 describe("buildUIView — Make primary picker", () => {
   it("emits an action-button only for eligible non-primary accounts (usable, not rate-limited)", () => {
-    const v = buildUIView(cfg, pickerPool, pickerReady, baseState, null, null);
-    const buttons = findByType(v.root, "action-button");
+    const v = buildUIView(cfgMakePrimaryOnly, pickerPool, pickerReady, baseState, null, null);
+    const buttons = buttonsByLabel(v.root, "Make primary");
     const accounts = buttons.map((b) => (b.props?.["body"] as { account: number }).account).sort();
     // #2 (ready) and #5 (quota-unknown but usable) are eligible; #1 active, #3 rate-limited, #4 unusable.
     expect(accounts).toEqual([2, 5]);
   });
 
   it("a quota-unknown but usable account is eligible (reporting gap, not unusability)", () => {
-    const v = buildUIView(cfg, pickerPool, pickerReady, baseState, null, null);
-    const accounts = findByType(v.root, "action-button").map(
+    const v = buildUIView(cfgMakePrimaryOnly, pickerPool, pickerReady, baseState, null, null);
+    const accounts = buttonsByLabel(v.root, "Make primary").map(
       (b) => (b.props?.["body"] as { account: number }).account,
     );
     expect(accounts).toContain(5);
   });
 
   it("never emits a button for the active (primary), rate-limited, or unusable account", () => {
-    const v = buildUIView(cfg, pickerPool, pickerReady, baseState, null, null);
-    const accounts = findByType(v.root, "action-button").map(
+    const v = buildUIView(cfgMakePrimaryOnly, pickerPool, pickerReady, baseState, null, null);
+    const accounts = buttonsByLabel(v.root, "Make primary").map(
       (b) => (b.props?.["body"] as { account: number }).account,
     );
     expect(accounts).not.toContain(1);
@@ -839,8 +849,8 @@ describe("buildUIView — Make primary picker", () => {
   });
 
   it("button carries the correct shape: POST switch-primary, specific mode, confirm, neutral tone", () => {
-    const v = buildUIView(cfg, pickerPool, pickerReady, baseState, null, null);
-    const button = findByType(v.root, "action-button").find(
+    const v = buildUIView(cfgMakePrimaryOnly, pickerPool, pickerReady, baseState, null, null);
+    const button = buttonsByLabel(v.root, "Make primary").find(
       (b) => (b.props?.["body"] as { account: number }).account === 2,
     );
     expect(button).toBeDefined();
@@ -854,17 +864,134 @@ describe("buildUIView — Make primary picker", () => {
   });
 
   it("uses a bare route path (no leading slash, host-resolved under the plugin namespace)", () => {
-    const v = buildUIView(cfg, pickerPool, pickerReady, baseState, null, null);
-    for (const b of findByType(v.root, "action-button")) {
+    const v = buildUIView(cfgMakePrimaryOnly, pickerPool, pickerReady, baseState, null, null);
+    for (const b of buttonsByLabel(v.root, "Make primary")) {
       const path = (b.props?.["route"] as { path: string }).path;
       expect(path.startsWith("/")).toBe(false);
       expect(path).toBe("switch-primary");
     }
   });
 
-  it("emits no action-button anywhere when makePrimaryButtons is false (pre-#1209 escape hatch)", () => {
+  it("emits no action-button anywhere when both button flags are false (pre-#1209 escape hatch)", () => {
     const v = buildUIView(cfgButtonsOff, pickerPool, pickerReady, baseState, null, null);
     expect(findByType(v.root, "action-button").length).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// "Take out of rotation" / "Return to rotation" toggle
+// ---------------------------------------------------------------------------
+
+// Rotation-only config so this toggle's buttons are isolated from Make-primary buttons.
+const cfgRotationOnly = parseConfig({ makePrimaryButtons: false });
+
+/** Account numbers carried by the rotation buttons of the given label. */
+function rotationAccounts(root: PluginUINode, label: string): number[] {
+  return buttonsByLabel(root, label)
+    .map((b) => (b.props?.["body"] as { account: number }).account)
+    .sort((a, b) => a - b);
+}
+
+describe("buildUIView — rotation toggle", () => {
+  it("offers 'Take out of rotation' for every non-active account (broad scope) when set is empty", () => {
+    const v = buildUIView(cfgRotationOnly, pickerPool, pickerReady, baseState, null, null);
+    // #2 usable, #3 rate-limited, #4 unusable, #5 quota-unknown — all non-active → eligible; #1 active → none.
+    expect(rotationAccounts(v.root, "Take out of rotation")).toEqual([2, 3, 4, 5]);
+    expect(rotationAccounts(v.root, "Return to rotation")).toEqual([]);
+  });
+
+  it("'Take out of rotation' carries POST set-rotation, inRotation:false, confirm, warn tone", () => {
+    const v = buildUIView(cfgRotationOnly, pickerPool, pickerReady, baseState, null, null);
+    const button = buttonsByLabel(v.root, "Take out of rotation").find(
+      (b) => (b.props?.["body"] as { account: number }).account === 2,
+    );
+    expect(button?.props).toMatchObject({
+      label: "Take out of rotation",
+      tone: "warn",
+      route: { method: "POST", path: "set-rotation" },
+      body: { account: 2, inRotation: false },
+      confirm: "Take this account out of rotation?",
+    });
+  });
+
+  it("a set member gets 'Return to rotation' (no confirm) and not 'Take out of rotation'", () => {
+    const v = buildUIView(
+      cfgRotationOnly,
+      pickerPool,
+      pickerReady,
+      baseState,
+      null,
+      null,
+      undefined,
+      null,
+      null,
+      new Set([3]),
+    );
+    expect(rotationAccounts(v.root, "Return to rotation")).toEqual([3]);
+    expect(rotationAccounts(v.root, "Take out of rotation")).toEqual([2, 4, 5]);
+    const ret = buttonsByLabel(v.root, "Return to rotation")[0];
+    expect(ret?.props).toMatchObject({
+      label: "Return to rotation",
+      tone: "ok",
+      route: { method: "POST", path: "set-rotation" },
+      body: { account: 3, inRotation: true },
+    });
+    expect(ret?.props?.["confirm"]).toBeUndefined();
+  });
+
+  it("shows 'Return to rotation' for an account that is both in the set AND active (clearable flag)", () => {
+    const v = buildUIView(
+      cfgRotationOnly,
+      pickerPool,
+      pickerReady,
+      baseState,
+      null,
+      null,
+      undefined,
+      null,
+      null,
+      new Set([1]),
+    );
+    expect(rotationAccounts(v.root, "Return to rotation")).toEqual([1]);
+  });
+
+  it("config-excluded account (excludeSlots) gets neither button, even when in the set", () => {
+    const cfgExcluded = parseConfig({ makePrimaryButtons: false, excludeSlots: [4] });
+    const v = buildUIView(
+      cfgExcluded,
+      pickerPool,
+      pickerReady,
+      baseState,
+      null,
+      null,
+      undefined,
+      null,
+      null,
+      new Set([4]),
+    );
+    expect(rotationAccounts(v.root, "Return to rotation")).not.toContain(4);
+    expect(rotationAccounts(v.root, "Take out of rotation")).not.toContain(4);
+  });
+
+  it("not-in-include accounts (includeSlots) get no rotation button", () => {
+    const cfgInclude = parseConfig({ makePrimaryButtons: false, includeSlots: [1, 2] });
+    const v = buildUIView(cfgInclude, pickerPool, pickerReady, baseState, null, null);
+    // Only #2 is a non-active in-include account → eligible; #3/#4/#5 are not-in-include.
+    expect(rotationAccounts(v.root, "Take out of rotation")).toEqual([2]);
+  });
+
+  it("emits no rotation button when rotationButtons is false", () => {
+    const cfgOff = parseConfig({ makePrimaryButtons: false, rotationButtons: false });
+    const v = buildUIView(cfgOff, pickerPool, pickerReady, baseState, null, null);
+    expect(buttonsByLabel(v.root, "Take out of rotation")).toHaveLength(0);
+    expect(buttonsByLabel(v.root, "Return to rotation")).toHaveLength(0);
+  });
+
+  it("config key-value block includes rotationButtons", () => {
+    const v = buildUIView(cfg, pool, ready, baseState, lastSpawn, null);
+    const kv = findByType(v.root, "key-value")[0];
+    const pairs = kv?.props?.["pairs"] as { key: string; value: string }[];
+    expect(pairs.some((p) => p.key === "rotationButtons")).toBe(true);
   });
 });
 

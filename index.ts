@@ -75,6 +75,38 @@ function parseSwitchPrimaryBody(body: unknown): SwitchPrimaryParsed {
   return { ok: true, mode, account: undefined };
 }
 
+type SetRotationParsed =
+  { ok: false; response: Response } | { ok: true; account: number; inRotation: boolean };
+
+/** Parse + validate the POST set-rotation body. `account` must be a FINITE INTEGER — a bare
+ *  `typeof === "number"` lets `NaN`/`Infinity`/floats through, none of which match a pool number and
+ *  which would poison the persisted set. `inRotation` is the declarative desired state
+ *  (false = take out, true = return). Returns ok:false with a ready 400 Response on error. */
+function parseSetRotationBody(body: unknown): SetRotationParsed {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const account = b["account"];
+  if (typeof account !== "number" || !Number.isFinite(account) || !Number.isInteger(account)) {
+    return {
+      ok: false,
+      response: Response.json(
+        { ok: false, error: '"account" must be a finite integer' },
+        { status: 400 },
+      ),
+    };
+  }
+  const inRotation = b["inRotation"];
+  if (typeof inRotation !== "boolean") {
+    return {
+      ok: false,
+      response: Response.json(
+        { ok: false, error: '"inRotation" must be a boolean' },
+        { status: 400 },
+      ),
+    };
+  }
+  return { ok: true, account, inRotation };
+}
+
 /**
  * Prep `ready` then invoke the cswap switch for the given mode. The `ready` mutation is
  * synchronous and runs BEFORE the cswap call (the caller invokes this immediately after
@@ -216,6 +248,25 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
     // Malformed state — default to null; don't break register.
   }
 
+  // Runtime out-of-rotation set (operator toggle via POST set-rotation). Seeded from durable state
+  // and shared BY REFERENCE with the Prewarmer (which reads it in refresh() classification and heal
+  // scoping) — the route mutates this same object. Guard + coerce to a clean number[] so a malformed
+  // persisted value can never make `new Set(...)` throw here and brick plugin load (mirrors the
+  // healRestoreFailure seed above).
+  let outOfRotation: Set<number>;
+  try {
+    const raw = ctx.state.get<unknown>("outOfRotation");
+    outOfRotation = new Set(
+      Array.isArray(raw)
+        ? raw.filter(
+            (n): n is number => typeof n === "number" && Number.isFinite(n) && Number.isInteger(n),
+          )
+        : [],
+    );
+  } catch {
+    outOfRotation = new Set();
+  }
+
   const prewarmer = new Prewarmer({
     cswap,
     cfg,
@@ -227,6 +278,7 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
     onRestoreFailure: (info) => persistRestoreFailure(info),
     onRestoreRecovered: () => persistRestoreFailure(null),
     initialRestoreFailure,
+    outOfRotation,
   });
 
   const publish = (): void => {
@@ -240,6 +292,7 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
         prewarmer.lastError,
         prewarmer.lastHeal,
         prewarmer.restoreFailure,
+        outOfRotation,
       ),
     );
     if (typeof ctx.publishUI === "function") {
@@ -254,6 +307,7 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
           history,
           prewarmer.lastHeal,
           prewarmer.restoreFailure,
+          outOfRotation,
         ),
       );
     }
@@ -370,6 +424,7 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
         prewarmer.lastError,
         prewarmer.lastHeal,
         prewarmer.restoreFailure,
+        outOfRotation,
       ),
     ),
   );
@@ -419,6 +474,52 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
     } finally {
       prewarmer.endSwitch();
       prewarmer.warmStale(); // rebuild ready on success AND failure; must run after endSwitch()
+    }
+  });
+  ctx.route("POST", "set-rotation", async (req): Promise<Response> => {
+    // Body-parse guard — malformed/missing body fails closed.
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return Response.json({ ok: false, error: "invalid JSON body" }, { status: 400 });
+    }
+    const parsed = parseSetRotationBody(body);
+    if (!parsed.ok) return parsed.response;
+    const { account, inRotation } = parsed;
+
+    // Take the SAME switch lock as switch-primary. While held, a concurrent switch-primary 409s and
+    // the background tick early-returns (index.ts tick guard) — so neither operation's refresh() can
+    // overwrite the other's fresh pool/activeAccountNumber, and this warmStale() (in finally, after
+    // endSwitch) is never suppressed by an in-flight switch.
+    if (prewarmer.isSwitching) {
+      return Response.json(
+        { ok: false, error: "a primary switch is in progress" },
+        { status: 409 },
+      );
+    }
+    prewarmer.beginSwitch();
+    try {
+      if (!inRotation) {
+        outOfRotation.add(account);
+        // Drop synchronously BEFORE refresh so onSpawn can't assign the account in the window
+        // before reclassification marks it usable:false (as executeSwitch does for a switch).
+        prewarmer.dropReady(account);
+      } else {
+        outOfRotation.delete(account);
+      }
+      ctx.state.set("outOfRotation", [...outOfRotation]);
+      await prewarmer.refresh(); // reclassify against the mutated set; publishes via onChange
+      return Response.json({ ok: true, account, inRotation });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      ctx.log.warn(`set-rotation failed: ${msg}`);
+      return Response.json({ ok: false, error: msg }, { status: 500 });
+    } finally {
+      prewarmer.endSwitch();
+      // Runs with switching=false — re-warms a just-returned account; a taken-out account stays
+      // usable:false and is skipped. Must run after endSwitch().
+      prewarmer.warmStale();
     }
   });
 

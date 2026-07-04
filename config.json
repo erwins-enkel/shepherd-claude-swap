@@ -10,6 +10,8 @@
   "bootWarmTimeoutMs": 30000,
   "abortOnEmpty": true,
   "makePrimaryButtons": true,
+  "//rotationButtons": "Show per-account 'Take out of rotation' / 'Return to rotation' action-buttons in the panel. Like makePrimaryButtons, requires a host whose publishUI renderer includes action-button (shepherd#1209/#1210); kept a separate flag so the two features toggle independently. Set false on an older host to fall back to badge-only. JSON has no comments; this // key is ignored by the plugin.",
+  "rotationButtons": true,
   "//routeAuxQuota": "DEFAULT true routes review/plan-gate/doc quota onto a pool account. REQUIRES a Shepherd release containing #1217 (NOT in v1.38.0 or earlier). On an older host you MUST set this to false or reviewers run UNAUTHENTICATED (re-login + theme prompt). JSON has no comments; this // key is ignored by the plugin.",
   "routeAuxQuota": true,
   "//autoHeal": "Enables auto-healing of accounts cswap transiently marks unavailable.",

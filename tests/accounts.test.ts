@@ -186,6 +186,57 @@ describe("classifyPool — include/exclude filtering", () => {
   });
 });
 
+describe("classifyPool — out-of-rotation set", () => {
+  it("defaults to an empty set (no arg) — both accounts usable", () => {
+    const pool = classifyPool(fixture, parseConfig({}));
+    expect(pool[0]!.usable).toBe(true);
+    expect(pool[1]!.usable).toBe(true);
+  });
+
+  it("member → usable:false, reason:'out-of-rotation', usageUnavailable:false", () => {
+    const pool = classifyPool(fixture, parseConfig({}), new Set([2]));
+    expect(pool[1]!.usable).toBe(false);
+    expect(pool[1]!.reason).toBe("out-of-rotation");
+    expect(pool[1]!.usageUnavailable).toBe(false);
+    // acct1 unaffected
+    expect(pool[0]!.usable).toBe(true);
+  });
+
+  it("carries pct + active + reset fields for an out-of-rotation account", () => {
+    const pool = classifyPool(fixture, parseConfig({}), new Set([1]));
+    expect(pool[0]!.reason).toBe("out-of-rotation");
+    expect(pool[0]!.fiveHourPct).toBe(93);
+    expect(pool[0]!.sevenDayPct).toBe(19);
+    expect(pool[0]!.active).toBe(true);
+    expect(pool[0]!.fiveHourResetClock).toBe("22:00");
+  });
+
+  it("excludeSlots takes priority over the out-of-rotation set (keeps excluded-slot reason)", () => {
+    const pool = classifyPool(fixture, parseConfig({ excludeSlots: [1] }), new Set([1]));
+    expect(pool[0]!.usable).toBe(false);
+    expect(pool[0]!.reason).toBe("excluded-slot");
+  });
+
+  it("non-ok usageStatus takes priority over the out-of-rotation set (keeps status reason)", () => {
+    const list: CswapListResult = {
+      schemaVersion: 1,
+      accounts: [
+        { number: 1, email: "a@b.com", active: false, usageStatus: "token_expired", usage: null },
+      ],
+    };
+    const pool = classifyPool(list, parseConfig({}), new Set([1]));
+    expect(pool[0]!.usable).toBe(false);
+    expect(pool[0]!.reason).toBe("token_expired");
+  });
+
+  it("out-of-rotation applies before not-in-include (member gets out-of-rotation reason)", () => {
+    // acct2 is in includeSlots (so not 'not-in-include') but toggled out → out-of-rotation
+    const pool = classifyPool(fixture, parseConfig({ includeSlots: [1, 2] }), new Set([2]));
+    expect(pool[1]!.usable).toBe(false);
+    expect(pool[1]!.reason).toBe("out-of-rotation");
+  });
+});
+
 describe("classifyPool — missing usage", () => {
   it("usage: null → fiveHourPct and sevenDayPct are null", () => {
     const list: CswapListResult = {

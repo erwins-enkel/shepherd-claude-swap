@@ -622,6 +622,53 @@ describe("Prewarmer.healUnavailable — scope", () => {
     for (let i = 0; i < 3; i++) await prewarmer.healUnavailable();
     expect(fake.switchCalls).toHaveLength(0);
   });
+
+  it("never heals an out-of-rotation account even when unavailable", async () => {
+    const outOfRotation = new Set<number>([2]);
+    const { prewarmer, fake } = makeHealer(
+      {
+        active: 1,
+        accts: [
+          { number: 1, active: true },
+          { number: 2, usageStatus: "unavailable" }, // taken out of rotation
+        ],
+      },
+      {},
+      { outOfRotation },
+    );
+    await prewarmer.refresh();
+    for (let i = 0; i < 4; i++) await prewarmer.healUnavailable();
+    expect(fake.switchCalls).toHaveLength(0);
+    expect(prewarmer.lastHeal).toBeNull();
+  });
+});
+
+describe("Prewarmer.refresh — out-of-rotation set", () => {
+  it("classifies a member as usable:false, reason:'out-of-rotation'", async () => {
+    const { prewarmer } = makePrewarmer({ outOfRotation: new Set([2]) });
+    await prewarmer.refresh();
+    const acct2 = prewarmer.pool.find((a) => a.number === 2);
+    expect(acct2?.usable).toBe(false);
+    expect(acct2?.reason).toBe("out-of-rotation");
+  });
+
+  it("observes a set mutation on the next refresh (shared by reference)", async () => {
+    const outOfRotation = new Set<number>();
+    const { prewarmer } = makePrewarmer({ outOfRotation });
+    await prewarmer.refresh();
+    expect(prewarmer.pool.find((a) => a.number === 2)?.usable).toBe(true);
+
+    // Owner (index.ts route) mutates the same object; next refresh must reflect it.
+    outOfRotation.add(2);
+    await prewarmer.refresh();
+    expect(prewarmer.pool.find((a) => a.number === 2)?.usable).toBe(false);
+    expect(prewarmer.pool.find((a) => a.number === 2)?.reason).toBe("out-of-rotation");
+
+    // And returning it (delete) restores usability.
+    outOfRotation.delete(2);
+    await prewarmer.refresh();
+    expect(prewarmer.pool.find((a) => a.number === 2)?.usable).toBe(true);
+  });
 });
 
 describe("Prewarmer.healUnavailable — stale snapshot", () => {
