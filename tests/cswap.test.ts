@@ -72,6 +72,21 @@ describe("Cswap.list()", () => {
     expect(result.accounts[1]!.usage?.sevenDay?.pct).toBe(98);
   });
 
+  it("carries usage.scoped through when present in the fixture (acct1 Fable window)", async () => {
+    const { runner } = makeRunner({
+      stdout: fixtureStdout,
+      stderr: "",
+      code: 0,
+      timedOut: false,
+    });
+    const cswap = new Cswap("cswap", runner);
+    const result = await cswap.list();
+    expect(result.accounts[0]!.usage?.scoped).toHaveLength(1);
+    expect(result.accounts[0]!.usage?.scoped?.[0]!.name).toBe("Fable");
+    expect(result.accounts[0]!.usage?.scoped?.[0]!.pct).toBe(42);
+    expect(result.accounts[1]!.usage?.scoped).toBeUndefined();
+  });
+
   it("throws on schemaVersion !== 1", async () => {
     const payload = JSON.stringify({ schemaVersion: 2, accounts: [] });
     const { runner } = makeRunner({ stdout: payload, stderr: "", code: 0, timedOut: false });

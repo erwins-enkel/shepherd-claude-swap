@@ -22,7 +22,16 @@
           "resetsAt": "2026-07-04T15:00:00.277447+00:00",
           "countdown": "6d 20h",
           "clock": "Jul 4 17:00"
-        }
+        },
+        "scoped": [
+          {
+            "name": "Fable",
+            "pct": 42.0,
+            "resetsAt": "2026-07-04T15:00:00.277447+00:00",
+            "countdown": "6d 20h",
+            "clock": "Jul 4 17:00"
+          }
+        ]
       }
     },
     {

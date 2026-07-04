@@ -1,6 +1,15 @@
 import type { ResolvedConfig } from "./config";
 import type { CswapListResult } from "./cswap";
 
+/** A per-model weekly limit window (e.g. "Fable"), normalized for display. */
+export interface ScopedWindow {
+  name: string;
+  pct: number;
+  resetsAt: string | null;
+  resetClock: string | null;
+  resetCountdown: string | null;
+}
+
 export interface PoolAccount {
   number: number;
   email: string;
@@ -17,6 +26,8 @@ export interface PoolAccount {
   sevenDayResetCountdown: string | null;
   active: boolean;
   usageUnavailable: boolean;
+  // Display-only: per-model weekly windows (e.g. Fable). Never affects usable/rateLimited/usageUnavailable.
+  scopedWindows: ScopedWindow[];
 }
 
 /**
@@ -36,6 +47,13 @@ export function classifyPool(list: CswapListResult, cfg: ResolvedConfig): PoolAc
       fiveHourResetCountdown: acct.usage?.fiveHour?.countdown ?? null,
       sevenDayResetCountdown: acct.usage?.sevenDay?.countdown ?? null,
     };
+    const scopedWindows: ScopedWindow[] = (acct.usage?.scoped ?? []).map((w) => ({
+      name: w.name,
+      pct: w.pct,
+      resetsAt: w.resetsAt ?? null,
+      resetClock: w.clock ?? null,
+      resetCountdown: w.countdown ?? null,
+    }));
 
     // Non-ok usageStatus: unusable, reason = status value
     if (acct.usageStatus !== "ok") {
@@ -50,6 +68,7 @@ export function classifyPool(list: CswapListResult, cfg: ResolvedConfig): PoolAc
         ...resetFields,
         active: acct.active,
         usageUnavailable: false,
+        scopedWindows,
       };
     }
 
@@ -66,6 +85,7 @@ export function classifyPool(list: CswapListResult, cfg: ResolvedConfig): PoolAc
         ...resetFields,
         active: acct.active,
         usageUnavailable: false,
+        scopedWindows,
       };
     }
 
@@ -82,6 +102,7 @@ export function classifyPool(list: CswapListResult, cfg: ResolvedConfig): PoolAc
         ...resetFields,
         active: acct.active,
         usageUnavailable: false,
+        scopedWindows,
       };
     }
 
@@ -101,6 +122,7 @@ export function classifyPool(list: CswapListResult, cfg: ResolvedConfig): PoolAc
       ...resetFields,
       active: acct.active,
       usageUnavailable: fiveHourPct === null && sevenDayPct === null,
+      scopedWindows,
     };
   });
 }

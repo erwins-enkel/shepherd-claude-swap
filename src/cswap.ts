@@ -8,12 +8,21 @@ export interface CswapUsageWindow {
   clock?: string;
 }
 
+/** A per-model weekly limit window (e.g. "Fable"). Absent on cswap < the version that added it. */
+export interface CswapScopedWindow extends CswapUsageWindow {
+  name: string;
+}
+
 export interface CswapAccount {
   number: number;
   email: string;
   active: boolean;
   usageStatus: string;
-  usage: { fiveHour?: CswapUsageWindow; sevenDay?: CswapUsageWindow } | null;
+  usage: {
+    fiveHour?: CswapUsageWindow;
+    sevenDay?: CswapUsageWindow;
+    scoped?: CswapScopedWindow[];
+  } | null;
 }
 
 export interface CswapListResult {
