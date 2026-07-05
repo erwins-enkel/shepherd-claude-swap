@@ -15,4 +15,4 @@ jobs:
       # Manifest mode: reads release-please-config.json + .release-please-manifest.json.
       # Opens/updates a release PR from Conventional Commits; merging it bumps
       # package.json + plugin.json ($.version), writes CHANGELOG.md, tags, and cuts a release.
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@v5
