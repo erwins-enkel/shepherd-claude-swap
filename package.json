@@ -14,7 +14,7 @@
   },
   "devDependencies": {
     "@commitlint/cli": "^21.2.0",
-    "@commitlint/config-conventional": "^21.1.0",
+    "@commitlint/config-conventional": "^21.2.0",
     "@types/bun": "latest",
     "eslint": "^10.6.0",
     "fallow": "^3.2.0",
