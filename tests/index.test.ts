@@ -1971,7 +1971,7 @@ describe("computeResetOrder", () => {
     expect(bySoonest).toEqual([3, 2, 1]);
   });
 
-  it("a reset at or before now is unknown, not imminent → unranked", () => {
+  it("a reset at or before now is treated as unknown → unranked", () => {
     // A stale snapshot can carry an elapsed resetsAt; treating it as real would sort the
     // just-rolled-over account (the LEAST perishable of all) as soonest.
     expect(ranked({ sevenDayResetsAt: at(-1) })).toBe(false);
