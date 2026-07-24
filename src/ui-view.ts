@@ -48,7 +48,8 @@ function identityBadge(acct: PoolAccount, spendInline: boolean): PluginUINode {
  */
 const STALE_USAGE_S = 300;
 
-/** Human age for a stale usage measurement, or null when it is fresh enough to be uninteresting. */
+/** Human age for a stale usage measurement, or null when it is fresh enough to be uninteresting.
+ *  The threshold is inclusive: exactly `STALE_USAGE_S` reports, matching the README's wording. */
 function usageAgeLabel(ageSeconds: number | null): string | null {
   if (ageSeconds === null || ageSeconds < STALE_USAGE_S) return null;
   const mins = Math.round(ageSeconds / 60);
@@ -65,10 +66,20 @@ function spendPctLabel(spend: SpendInfo): string {
   return `${Math.round(spend.pct * 10) / 10}%`;
 }
 
+/** `<used>/<limit> <CUR>` at currency precision.
+ *
+ *  cswap derives both from integer cents (`float(x) / 100`), so in practice they are already short
+ *  — unlike `pct`, which is the API's own ratio. Formatted anyway, because these are money: two
+ *  decimals is the correct display for a currency amount, and it removes any chance of a bare
+ *  float landing next to an already-rounded pct in the same caption. */
+function spendAmountLabel(spend: SpendInfo): string {
+  return `${spend.used.toFixed(2)}/${spend.limit.toFixed(2)} ${spend.currency}`;
+}
+
 /** Compact spend text for the identity label: `spend <pct>% (<used>/<limit> <CUR>)`. */
 function spendSegment(spend: SpendInfo): string {
   return (
-    `spend ${spendPctLabel(spend)} (${spend.used}/${spend.limit} ${spend.currency}` +
+    `spend ${spendPctLabel(spend)} (${spendAmountLabel(spend)}` +
     `${resetSuffix(spend.resetClock, spend.resetCountdown)})`
   );
 }
@@ -287,7 +298,7 @@ function spendMeter(accountNumber: number, spend: SpendInfo): PluginUINode {
       label: `#${accountNumber} · spend`,
       value: spend.pct,
       max: 100,
-      caption: `${spendPctLabel(spend)} · ${spend.used}/${spend.limit} ${spend.currency}${resetSuffix(spend.resetClock, spend.resetCountdown)}`,
+      caption: `${spendPctLabel(spend)} · ${spendAmountLabel(spend)}${resetSuffix(spend.resetClock, spend.resetCountdown)}`,
       tone: spend.pct >= 100 ? "error" : "ok",
     },
   };
@@ -331,7 +342,7 @@ function spendGauge(accountNumber: number, spend: SpendInfo): PluginUINode {
       value: spend.pct,
       max: 100,
       tone: spend.pct >= 100 ? "error" : "ok",
-      caption: `${spendPctLabel(spend)} · ${spend.used}/${spend.limit} ${spend.currency}${resetSuffix(spend.resetClock, spend.resetCountdown)}`,
+      caption: `${spendPctLabel(spend)} · ${spendAmountLabel(spend)}${resetSuffix(spend.resetClock, spend.resetCountdown)}`,
     },
   };
 }

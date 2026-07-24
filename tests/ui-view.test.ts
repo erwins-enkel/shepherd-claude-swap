@@ -1378,7 +1378,7 @@ describe("buildUIView — spend", () => {
       null,
     );
     expect(widgetLabels(v.root).filter((l) => l.includes("· spend")).length).toBe(2);
-    expect(captions(v.root).some((c) => c.includes("100.33/100 EUR"))).toBe(true);
+    expect(captions(v.root).some((c) => c.includes("100.33/100.00 EUR"))).toBe(true);
   });
 
   it("uses cswap's pct verbatim rather than used/limit", () => {
@@ -1580,6 +1580,23 @@ describe("buildUIView — spend percentage is display-rounded", () => {
     expect(badges.some((l) => l.includes("1.3727272727272726"))).toBe(false);
   });
 
+  it("formats used/limit at currency precision, so no bare float lands beside a rounded pct", () => {
+    const longFloat: SpendInfo = { ...RAW, used: 1.3727272727272726, limit: 110 };
+    const v = buildUIView(
+      cfg,
+      [makeAccount(1, { spend: longFloat })],
+      new Set(),
+      baseState,
+      null,
+      null,
+    );
+    const caption = [...findByType(v.root, "meter")]
+      .filter((n) => String(n.props?.["label"]).includes("· spend"))
+      .map((n) => String(n.props?.["caption"]))[0];
+    expect(caption).toContain("1.37/110.00 EUR");
+    expect(caption).not.toContain("1.3727272727272726");
+  });
+
   it("keeps a whole percentage clean rather than forcing a decimal", () => {
     const v = buildUIView(
       cfg,
@@ -1718,6 +1735,11 @@ describe("buildUIView — usage freshness", () => {
 
   it("reports above the threshold, qualified as of the last refresh", () => {
     expect(label(301)).toContain("usage 5m old (at last refresh)");
+  });
+
+  it("reports at exactly the threshold — the boundary is inclusive", () => {
+    // Pins the README's "5 minutes or older" against the guard's `< STALE_USAGE_S`.
+    expect(label(300)).toContain("usage 5m old (at last refresh)");
   });
 
   it("switches to hours for a long-stale measurement", () => {
