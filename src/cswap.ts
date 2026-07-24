@@ -8,9 +8,40 @@ export interface CswapUsageWindow {
   clock?: string;
 }
 
+/**
+ * A WEEKLY window (`sevenDay` or a `scoped` entry) additionally carries pace fields (cswap 0.23+).
+ * Both are absent when pace is not computable — cswap suppresses them for 24h after a window reset
+ * — so both are optional and normalize to null/false.
+ *
+ * `projectedExhaustionAt` and `willLastToReset` are deliberately NOT typed: cswap documents them as
+ * JSON-only because the linear projection has wide error bars, nothing here reads them, and typing
+ * them would be dead data.
+ */
+export interface CswapWeeklyWindow extends CswapUsageWindow {
+  expectedPct?: number;
+  aheadOfPace?: boolean;
+}
+
 /** A per-model weekly limit window (e.g. "Fable"). Absent on cswap < the version that added it. */
-export interface CswapScopedWindow extends CswapUsageWindow {
+export interface CswapScopedWindow extends CswapWeeklyWindow {
   name: string;
+}
+
+/**
+ * Pay-as-you-go extra-usage budget (cswap 0.23+). cswap emits the entry only when used_credits,
+ * monthly_limit AND utilization are all non-null, so those four are required here; an unlimited
+ * plan (monthly_limit null) omits the whole entry rather than reporting a zero limit. `pct` is the
+ * API's `utilization` verbatim and is NOT derivable from used/limit — a live account reports
+ * used 100.33 / limit 100.00 with pct 100.0. The reset trio appears together or not at all.
+ */
+export interface CswapSpend {
+  used: number;
+  limit: number;
+  pct: number;
+  currency: string;
+  resetsAt?: string;
+  countdown?: string;
+  clock?: string;
 }
 
 export interface CswapAccount {
@@ -18,9 +49,21 @@ export interface CswapAccount {
   email: string;
   active: boolean;
   usageStatus: string;
+  /** Short operator-set display name (cswap 0.21+). Emitted only when set. */
+  alias?: string;
+  /** Held out of cswap's own rotation via `cswap disable` (0.21+). Emitted only when true. */
+  disabled?: boolean;
+  organizationName?: string;
+  /**
+   * Age in seconds of the usage measurement AT EMIT TIME (cswap 0.23+) — how long cswap has been
+   * serving this snapshot, not how long ago the plugin last polled. Emitted only alongside a
+   * non-null `usage` and only when an age is known.
+   */
+  usageAgeSeconds?: number;
   usage: {
     fiveHour?: CswapUsageWindow;
-    sevenDay?: CswapUsageWindow;
+    sevenDay?: CswapWeeklyWindow;
+    spend?: CswapSpend;
     scoped?: CswapScopedWindow[];
   } | null;
 }

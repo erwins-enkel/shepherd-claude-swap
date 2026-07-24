@@ -1,7 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { Cswap, type Runner } from "../src/cswap";
+import { Cswap, type CswapListResult, type Runner } from "../src/cswap";
 import fixtureRaw from "../docs/contracts/cswap-list.sample.json";
 import switchFixtureRaw from "../docs/contracts/cswap-switch.sample.json";
+import sample023Raw from "../docs/contracts/cswap-list-0.23.sample.json";
 
 /** Capture the last call to the runner. */
 function makeRunner(response: {
@@ -382,5 +383,81 @@ describe("Cswap.switchTo()", () => {
     const { runner } = makeRunner({ stdout: payload, stderr: "", code: 0, timedOut: false });
     const cswap = new Cswap("cswap", runner);
     await expect(cswap.switchTo(1)).rejects.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 0.23 field contract — LAYER 1: the typed accessor must reach every newly
+// consumed key on output captured from the real CLI.
+//
+// Every new field is optional, and `list()` casts the parsed JSON to the
+// interface without per-field validation — so an interface key that disagrees
+// with what cswap actually emits reads back `undefined` rather than failing
+// anywhere. Asserting through the TYPED accessor is what catches that: rename
+// `usageAgeSeconds` in the interface and this test goes red.
+//
+// Layer 2 (normalization, in accounts.test.ts) covers the independent case of
+// a reader that misspells the key. See docs/contracts/cswap-0.23-fields.md.
+// ---------------------------------------------------------------------------
+
+describe("Cswap.list — 0.23 fields, captured from the real CLI", () => {
+  async function listCaptured(): Promise<CswapListResult> {
+    const { runner } = makeRunner({
+      stdout: JSON.stringify(sample023Raw),
+      stderr: "",
+      code: 0,
+      timedOut: false,
+    });
+    return new Cswap("cswap", runner).list();
+  }
+
+  it("reaches alias / disabled / organizationName / usageAgeSeconds through the typed accessor", async () => {
+    const result = await listCaptured();
+    const parked = result.accounts.find((a) => a.disabled === true);
+    expect(parked).toBeDefined();
+    expect(parked?.alias).toBe("devbox");
+
+    for (const acct of result.accounts) {
+      expect(typeof acct.organizationName).toBe("string");
+      // 0.0 is a legitimate age — assert on the type, never on truthiness.
+      expect(typeof acct.usageAgeSeconds).toBe("number");
+      expect(Number.isFinite(acct.usageAgeSeconds)).toBe(true);
+    }
+  });
+
+  it("reaches every spend sub-field on the accounts that report a plan", async () => {
+    const result = await listCaptured();
+    const withSpend = result.accounts.filter((a) => a.usage?.spend !== undefined);
+    expect(withSpend.length).toBeGreaterThan(0);
+
+    for (const acct of withSpend) {
+      const spend = acct.usage?.spend;
+      expect(typeof spend?.used).toBe("number");
+      expect(typeof spend?.limit).toBe("number");
+      expect(typeof spend?.pct).toBe("number");
+      expect(typeof spend?.currency).toBe("string");
+    }
+  });
+
+  it("reaches pace fields on both sevenDay and a scoped window", async () => {
+    const result = await listCaptured();
+
+    const weekly = result.accounts.map((a) => a.usage?.sevenDay).filter((w) => w !== undefined);
+    expect(weekly.length).toBeGreaterThan(0);
+    for (const w of weekly) {
+      expect(typeof w?.expectedPct).toBe("number");
+      expect(typeof w?.aheadOfPace).toBe("boolean");
+    }
+    // The capture caught a genuinely ahead-of-pace window; pin that the `true`
+    // case is represented, not just the field's presence.
+    expect(weekly.some((w) => w?.aheadOfPace === true)).toBe(true);
+
+    const scoped = result.accounts.flatMap((a) => a.usage?.scoped ?? []);
+    expect(scoped.length).toBeGreaterThan(0);
+    for (const w of scoped) {
+      expect(typeof w.name).toBe("string");
+      expect(typeof w.expectedPct).toBe("number");
+      expect(typeof w.aheadOfPace).toBe("boolean");
+    }
   });
 });
