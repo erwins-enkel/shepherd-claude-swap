@@ -1469,6 +1469,72 @@ describe("buildUIView — spend", () => {
   });
 });
 
+describe("buildUIView — spend reset suffix", () => {
+  // cswap emits spend's reset trio only when the API supplies a reset instant, so the captured
+  // sample has none — but all three are consumed through resetSuffix(), in both render paths.
+  const WITH_RESET: SpendInfo = {
+    used: 12.5,
+    limit: 100,
+    pct: 12.5,
+    currency: "EUR",
+    resetsAt: "2026-08-01T00:00:00+00:00",
+    resetClock: "Aug 1 02:00",
+    resetCountdown: "7d 4h",
+  };
+
+  it("renders the reset suffix on the rich meter and gauge", () => {
+    const v = buildUIView(
+      cfg,
+      [makeAccount(1, { spend: WITH_RESET })],
+      new Set(),
+      baseState,
+      null,
+      null,
+    );
+    const spendCaptions = [...findByType(v.root, "meter"), ...findByType(v.root, "gauge")]
+      .filter((n) => String(n.props?.["label"]).includes("· spend"))
+      .map((n) => String(n.props?.["caption"]));
+    expect(spendCaptions.length).toBe(2);
+    for (const c of spendCaptions) expect(c).toContain("resets Aug 1 02:00 (7d 4h)");
+  });
+
+  it("renders it in the compact label segment too", () => {
+    const big = Array.from({ length: 16 }, (_, i) =>
+      makeAccount(i + 1, {
+        active: false,
+        spend: WITH_RESET,
+        scopedWindows: ["A", "B", "C", "D"].map((name) => ({
+          name,
+          pct: 10,
+          resetsAt: null,
+          resetClock: null,
+          resetCountdown: null,
+          expectedPct: null,
+          aheadOfPace: false,
+        })),
+      }),
+    );
+    const v = buildUIView(cfg, big, new Set(), baseState, null, null);
+    const badges = findByType(v.root, "badge").map((b) => String(b.props?.["label"] ?? ""));
+    expect(badges.some((l) => l.includes("resets Aug 1 02:00 (7d 4h)"))).toBe(true);
+  });
+
+  it("omits the suffix entirely when cswap sends no reset instant", () => {
+    const v = buildUIView(
+      cfg,
+      [makeAccount(1, { spend: SPEND })],
+      new Set(),
+      baseState,
+      null,
+      null,
+    );
+    const caption = [...findByType(v.root, "meter")]
+      .filter((n) => String(n.props?.["label"]).includes("· spend"))
+      .map((n) => String(n.props?.["caption"]))[0];
+    expect(caption).not.toContain("resets");
+  });
+});
+
 describe("buildUIView — spend percentage is display-rounded", () => {
   // cswap pre-rounds the 5h/7d window pcts but passes spend.pct through from the API verbatim,
   // so it arrives at full float precision — the captured sample carries 1.3727272727272726.

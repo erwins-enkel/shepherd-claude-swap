@@ -72,22 +72,6 @@ export interface PoolAccount {
   scopedWindows: ScopedWindow[];
 }
 
-/**
- * Classify every account row from a --list result into the pool, honoring config.
- * api_key/token_expired/no_credentials/unavailable → usable:false with reason.
- * include/exclude slots filter membership.
- *
- * `outOfRotation` is the runtime, operator-driven exclusion set (durable, seeded from plugin
- * state — the UI "Take out of rotation" toggle). It is applied AFTER the static `excludeSlots`
- * branch, so a config-excluded account keeps its more-specific `excluded-slot` reason; a member of
- * this set is marked `usable:false, reason:"out-of-rotation"`, mirroring `excluded-slot` exactly.
- *
- * `cswap disable <n>` (cswap 0.21+) is honored READ-ONLY as a second, independent gate with its own
- * `reason:"cswap-disabled"`. It is checked BEFORE `outOfRotation` deliberately: when both are set,
- * the gate the panel cannot release is the honest one to report, and once `cswap enable <n>` clears
- * it the row falls through to `out-of-rotation` with its working button. The plugin never writes
- * cswap's flag — each gate is released where it was set.
- */
 /** One 5h/7d window's normalized display fields. Absent window ⇒ every field null. */
 function windowDisplay(w: CswapUsageWindow | undefined): {
   pct: number | null;
@@ -191,6 +175,22 @@ function classifyVerdict(
   };
 }
 
+/**
+ * Classify every account row from a --list result into the pool, honoring config.
+ * api_key/token_expired/no_credentials/unavailable → usable:false with reason.
+ * include/exclude slots filter membership.
+ *
+ * `outOfRotation` is the runtime, operator-driven exclusion set (durable, seeded from plugin
+ * state — the UI "Take out of rotation" toggle). It is applied AFTER the static `excludeSlots`
+ * branch, so a config-excluded account keeps its more-specific `excluded-slot` reason; a member of
+ * this set is marked `usable:false, reason:"out-of-rotation"`, mirroring `excluded-slot` exactly.
+ *
+ * `cswap disable <n>` (cswap 0.21+) is honored READ-ONLY as a second, independent gate with its own
+ * `reason:"cswap-disabled"`. It is checked BEFORE `outOfRotation` deliberately: when both are set,
+ * the gate the panel cannot release is the honest one to report, and once `cswap enable <n>` clears
+ * it the row falls through to `out-of-rotation` with its working button. The plugin never writes
+ * cswap's flag — each gate is released where it was set.
+ */
 export function classifyPool(
   list: CswapListResult,
   cfg: ResolvedConfig,

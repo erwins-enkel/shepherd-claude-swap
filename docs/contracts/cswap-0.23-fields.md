@@ -140,23 +140,43 @@ organisation, which is what the panel's organisation segment exists to disambigu
 
 ### What the capture actually exercised
 
-Pace fields are API-driven and **cannot be arranged by any cswap command** — `compute_pace()`
-returns `None` within 24 h of a window reset, and `aheadOfPace: true` additionally needs the live
-burn rate to be ≥15 pp over expected. The plan therefore allowed a labelled synthetic fallback
-fixture. **It proved unnecessary**: this capture happened to contain every consumed field,
-including a genuinely ahead-of-pace window.
+Some fields are API-driven and **cannot be arranged by any cswap command**: `compute_pace()` returns
+`None` within 24 h of a window reset, `aheadOfPace: true` additionally needs the live burn rate to be
+≥15 pp over expected, and spend's reset trio is emitted only when the API supplies a reset instant
+(`if "resets_at" in spend`). The plan therefore reserved a labelled synthetic fallback fixture.
 
-| Field                                 | Present in the capture                                                 |
-| ------------------------------------- | ---------------------------------------------------------------------- |
-| `alias`, `disabled`                   | ✅ slot 3 (arranged by the procedure)                                  |
-| `organizationName`                    | ✅ all three                                                           |
-| `usageAgeSeconds`                     | ✅ all three                                                           |
-| `spend` (+ all four sub-fields)       | ✅ slots 1 and 2; slot 3 has no plan (so the null path is covered too) |
-| `expectedPct`, `aheadOfPace` (7d)     | ✅ all three                                                           |
-| `aheadOfPace: true` specifically      | ✅ slot 3's 7-day window                                               |
-| `expectedPct`, `aheadOfPace` (scoped) | ✅ all three                                                           |
+The pace fields did not need it — this capture happened to contain them, including a genuinely
+ahead-of-pace window. **Three fields did**: neither spend-carrying account on this host has a reset
+instant, so no capture here could contain `spend.resetsAt` / `countdown` / `clock`.
 
-Every assertion therefore reads from real CLI output. Two test layers use it, because two
+| Field                                       | Present in the capture                                                 |
+| ------------------------------------------- | ---------------------------------------------------------------------- |
+| `alias`, `disabled`                         | ✅ slot 3 (arranged by the procedure)                                  |
+| `organizationName`                          | ✅ all three                                                           |
+| `usageAgeSeconds`                           | ✅ all three                                                           |
+| `spend.used` / `limit` / `pct` / `currency` | ✅ slots 1 and 2; slot 3 has no plan (so the null path is covered too) |
+| `spend.resetsAt` / `countdown` / `clock`    | ❌ **not present** — see below                                         |
+| `expectedPct`, `aheadOfPace` (7d)           | ✅ all three                                                           |
+| `aheadOfPace: true` specifically            | ✅ slot 3's 7-day window                                               |
+| `expectedPct`, `aheadOfPace` (scoped)       | ✅ all three                                                           |
+
+#### The one gap, and how far it is closed
+
+`cswap-list-0.23.synthetic.json` carries those three keys and nothing else is asserted from it. It is
+labelled synthetic in its own `//` field, and the honest limitation stands: **their spellings are the
+only consumed keys in this work not verified against live CLI output.**
+
+Two things narrow the risk. Their spellings are transcribed from `json_output.py` → `usage_to_json`,
+not guessed. And that function derives them from the _same_ code path as the `fiveHour` / `sevenDay`
+reset trio, which the captured sample **does** verify against live output — a divergence would mean
+cswap emitting one spelling for window resets and another for spend resets from adjacent lines of the
+same function.
+
+What the synthetic fixture still buys is the reader half of the contract: `toSpend` misspelling one of
+the three would leave the field `null`, indistinguishable from cswap not sending it, and now fails a
+test instead.
+
+Every other assertion reads from real CLI output. Two test layers use the captured sample, because two
 independent misspellings are possible:
 
 - **Layer 1** (`tests/cswap.test.ts`) — asserts each field is reachable through the **typed
