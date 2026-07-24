@@ -1930,6 +1930,11 @@ describe("computeResetOrder", () => {
       active: false,
       usageUnavailable: false,
       cswapDisabled: false,
+      alias: null,
+      organizationName: null,
+      usageAgeSeconds: null,
+      spend: null,
+      sevenDayPace: { expectedPct: null, aheadOfPace: false },
       scopedWindows: [],
       ...o,
     };

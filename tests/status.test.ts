@@ -28,6 +28,11 @@ function makeAccount(number: number, opts: Partial<PoolAccount> = {}): PoolAccou
     active: true,
     usageUnavailable: false,
     cswapDisabled: false,
+    alias: null,
+    organizationName: null,
+    usageAgeSeconds: null,
+    spend: null,
+    sevenDayPace: { expectedPct: null, aheadOfPace: false },
     scopedWindows: [],
     ...opts,
   };
@@ -195,6 +200,8 @@ describe("buildStatus — pool section", () => {
       resetsAt: "2026-07-06T00:00:00.000Z",
       resetClock: "Sun 00:00",
       resetCountdown: "2d",
+      expectedPct: null,
+      aheadOfPace: false,
     };
     const withFable = makeAccount(1, { scopedWindows: [fableWindow] });
     const s = buildStatus(cfg, [withFable], new Set([1]), baseState, null, null, null, null);

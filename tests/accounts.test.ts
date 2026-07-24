@@ -341,6 +341,8 @@ describe("classifyPool — scopedWindows", () => {
         resetsAt: null,
         resetClock: null,
         resetCountdown: null,
+        expectedPct: null,
+        aheadOfPace: false,
       },
     ]);
   });
@@ -441,7 +443,15 @@ describe("classifyPool — scopedWindows", () => {
     expect(pool[0]!.rateLimited).toBe(false);
     expect(pool[0]!.usageUnavailable).toBe(false);
     expect(pool[0]!.scopedWindows).toEqual([
-      { name: "Fable", pct: 100, resetsAt: null, resetClock: null, resetCountdown: null },
+      {
+        name: "Fable",
+        pct: 100,
+        resetsAt: null,
+        resetClock: null,
+        resetCountdown: null,
+        expectedPct: null,
+        aheadOfPace: false,
+      },
     ]);
   });
 });
@@ -530,5 +540,79 @@ describe("classifyPool — captured 0.23 sample normalizes cswap-disabled", () =
     expect(parked).toHaveLength(1);
     expect(parked[0]!.reason).toBe("cswap-disabled");
     expect(parked[0]!.usable).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LAYER 2 of the 0.23 field contract: normalization must read the keys the real
+// CLI actually emits.
+//
+// Layer 1 (cswap.test.ts) catches an INTERFACE key that disagrees with cswap.
+// This catches the independent case of a READER that misspells one: the typed
+// read would still compile and still yield undefined, and the normalized field
+// would sit at null — indistinguishable from "cswap didn't send it". Asserting
+// the captured values after classifyPool is what closes that.
+// ---------------------------------------------------------------------------
+
+describe("classifyPool — captured 0.23 sample normalizes every consumed field", () => {
+  const pool = classifyPool(sample023, parseConfig({}));
+  const parked = pool.find((a) => a.cswapDisabled)!;
+
+  it("alias", () => {
+    expect(parked.alias).toBe("devbox");
+    // Accounts without an alias must normalize to null, not undefined or "".
+    expect(pool.filter((a) => a.alias === null).length).toBe(pool.length - 1);
+  });
+
+  it("organizationName", () => {
+    for (const acct of pool) expect(typeof acct.organizationName).toBe("string");
+    // Slots 1 and 2 share an email and differ only by organisation — the real-world case.
+    const [a, b] = [pool[0]!, pool[1]!];
+    expect(a.email).toBe(b.email);
+    expect(a.organizationName).not.toBe(b.organizationName);
+  });
+
+  it("usageAgeSeconds", () => {
+    for (const acct of pool) {
+      expect(typeof acct.usageAgeSeconds).toBe("number");
+      expect(Number.isFinite(acct.usageAgeSeconds)).toBe(true);
+    }
+  });
+
+  it("spend, every sub-field", () => {
+    const withSpend = pool.filter((a) => a.spend !== null);
+    expect(withSpend.length).toBeGreaterThan(0);
+    for (const acct of withSpend) {
+      expect(typeof acct.spend!.used).toBe("number");
+      expect(typeof acct.spend!.limit).toBe("number");
+      expect(typeof acct.spend!.pct).toBe("number");
+      expect(typeof acct.spend!.currency).toBe("string");
+    }
+    // An account with no pay-as-you-go plan normalizes to null — "no plan", not "unknown".
+    expect(pool.some((a) => a.spend === null)).toBe(true);
+  });
+
+  it("pace on the 7-day window, including a genuinely ahead-of-pace one", () => {
+    for (const acct of pool) expect(typeof acct.sevenDayPace.expectedPct).toBe("number");
+    expect(pool.some((a) => a.sevenDayPace.aheadOfPace)).toBe(true);
+  });
+
+  it("pace on scoped windows", () => {
+    const scoped = pool.flatMap((a) => a.scopedWindows);
+    expect(scoped.length).toBeGreaterThan(0);
+    for (const w of scoped) {
+      expect(typeof w.expectedPct).toBe("number");
+      expect(typeof w.aheadOfPace).toBe("boolean");
+    }
+  });
+
+  it("spend never affects classification", () => {
+    // The spend-capped account is at 100% of its budget and must still be usable — spend is a
+    // display axis, exactly like scopedWindows.
+    const capped = pool.filter((a) => a.spend !== null && a.spend.pct >= 100);
+    expect(capped.length).toBeGreaterThan(0);
+    for (const acct of capped) {
+      if (!acct.cswapDisabled) expect(acct.rateLimited).toBe(false);
+    }
   });
 });

@@ -1,6 +1,6 @@
 import type { PluginUINode, PluginUIView } from "../types";
 import type { ResolvedConfig } from "./config";
-import type { PoolAccount } from "./accounts";
+import type { PoolAccount, SpendInfo, WindowPace } from "./accounts";
 import type { SelectionState } from "./selection";
 import type { LastSpawn } from "./status";
 import type { HealRecord, HealRestoreFailure } from "./prewarm";
@@ -15,9 +15,51 @@ import { History, downsample, CHART_WINDOW, MAX_DETAILED_ACCOUNTS } from "./hist
  *  badges "primary" and an unavailable one badges its status, both with no rotation button and no
  *  hint that `cswap enable <n>` is the lever. This label renders unconditionally on every row, in
  *  both the flat and graphical sections, and costs no extra node. */
-function identityBadge(acct: PoolAccount): PluginUINode {
-  const label = `#${acct.number} ${acct.email}${acct.cswapDisabled ? " · cswap-disabled" : ""}`;
-  return { type: "badge", props: { label, tone: "neutral" } };
+function identityBadge(acct: PoolAccount, spendInline: boolean): PluginUINode {
+  const segments = [
+    // The email is ALWAYS rendered, even when an alias is set: this badge is the only place the
+    // panel shows it, and it is what maps a row to its on-disk profile
+    // (`sessions/<n>-<slugify(email)>/`). An alias is a nickname, not an identity.
+    acct.alias !== null ? `${acct.alias} (${acct.email})` : acct.email,
+    ...(acct.cswapDisabled ? ["cswap-disabled"] : []),
+    ...(acct.organizationName !== null ? [acct.organizationName] : []),
+    ...(spendInline && acct.spend !== null ? [spendSegment(acct.spend)] : []),
+    ...(usageAgeLabel(acct.usageAgeSeconds) !== null
+      ? [`usage ${usageAgeLabel(acct.usageAgeSeconds)} old (at last refresh)`]
+      : []),
+  ];
+  return {
+    type: "badge",
+    props: { label: `#${acct.number} ${segments.join(" · ")}`, tone: "neutral" },
+  };
+}
+
+/**
+ * Staleness threshold (seconds) for surfacing `usageAgeSeconds`.
+ *
+ * Deliberately a FLAT constant tied to cswap's own ~3-minute poll cadence, NOT derived from this
+ * plugin's `refreshIntervalMs`. They measure different clocks: `usageAgeSeconds` is how long cswap
+ * has been serving a stale snapshot, while `refreshIntervalMs` is how often we re-read that number.
+ * Gating the former on the latter could only ever suppress — at the shipped 600 000 ms it would
+ * hide ten minutes of cswap last-good serving, and at a legal 3 600 000 a full hour of it, which is
+ * exactly the condition worth showing. Our own polling lag is handled by the "at last refresh"
+ * qualifier instead.
+ */
+const STALE_USAGE_S = 300;
+
+/** Human age for a stale usage measurement, or null when it is fresh enough to be uninteresting. */
+function usageAgeLabel(ageSeconds: number | null): string | null {
+  if (ageSeconds === null || ageSeconds < STALE_USAGE_S) return null;
+  const mins = Math.round(ageSeconds / 60);
+  return mins < 60 ? `${mins}m` : `${Math.round(mins / 60)}h`;
+}
+
+/** Compact spend text for the identity label: `spend <pct>% (<used>/<limit> <CUR>)`. */
+function spendSegment(spend: SpendInfo): string {
+  return (
+    `spend ${spend.pct}% (${spend.used}/${spend.limit} ${spend.currency}` +
+    `${resetSuffix(spend.resetClock, spend.resetCountdown)})`
+  );
 }
 
 /** Reset suffix for a quota caption. Anchored on the absolute `clock` (non-drifting); the
@@ -32,6 +74,27 @@ function resetSuffix(clock: string | null, countdown: string | null): string {
 function quotaCaption(pct: number | null, clock: string | null, countdown: string | null): string {
   if (pct === null) return "n/a";
   return `${pct}%${resetSuffix(clock, countdown)}`;
+}
+
+/** Caption for a WEEKLY window: the quota caption plus an "ahead of pace" note when cswap says the
+ *  window is burning faster than the week's elapsed fraction. cswap noise-gates that flag (>=15pp
+ *  over expected, suppressed for 24h after a reset), so it is shown verbatim rather than re-judged. */
+function weeklyCaption(
+  pct: number | null,
+  clock: string | null,
+  countdown: string | null,
+  pace: WindowPace,
+): string {
+  const base = quotaCaption(pct, clock, countdown);
+  if (!pace.aheadOfPace) return base;
+  const expected = pace.expectedPct !== null ? ` (expected ${pace.expectedPct}%)` : "";
+  return `${base} · ahead of pace${expected}`;
+}
+
+/** Tone for a weekly window: `error` at/over the limit, else `warn` when ahead of pace, else ok. */
+function weeklyTone(pct: number, rateLimitPct: number, pace: WindowPace): string {
+  if (pct >= rateLimitPct) return "error";
+  return pace.aheadOfPace ? "warn" : "ok";
 }
 
 /** Text node explaining why quota is unknown. Wording differs for the active (primary) account
@@ -147,8 +210,15 @@ function rotationButtonFor(
 /** Meters (5h + 7d + one per scoped weekly window, e.g. Fable) for an account with known
  *  quota, or the quota-unknown note. Scoped-window tone is display-only — it never affects
  *  account classification (that invariant lives in accounts.ts). */
-function buildAccountMeters(acct: PoolAccount, rateLimitPct: number): PluginUINode[] {
-  if (acct.usageUnavailable) return [quotaUnknownNote(acct.active)];
+function buildAccountMeters(
+  acct: PoolAccount,
+  rateLimitPct: number,
+  richSpend: boolean,
+): PluginUINode[] {
+  // Spend is a DIFFERENT axis from the 5h/7d quota windows and can be known while they are not,
+  // so a quota-unknown row still shows it rather than hiding real information.
+  const spendNodes = richSpend && acct.spend !== null ? [spendMeter(acct)] : [];
+  if (acct.usageUnavailable) return [quotaUnknownNote(acct.active), ...spendNodes];
   const fivePct = acct.fiveHourPct ?? 0;
   const sevenPct = acct.sevenDayPct ?? 0;
   const fiveCaption = quotaCaption(
@@ -156,10 +226,11 @@ function buildAccountMeters(acct: PoolAccount, rateLimitPct: number): PluginUINo
     acct.fiveHourResetClock,
     acct.fiveHourResetCountdown,
   );
-  const sevenCaption = quotaCaption(
+  const sevenCaption = weeklyCaption(
     acct.sevenDayPct,
     acct.sevenDayResetClock,
     acct.sevenDayResetCountdown,
+    acct.sevenDayPace,
   );
   return [
     {
@@ -179,7 +250,7 @@ function buildAccountMeters(acct: PoolAccount, rateLimitPct: number): PluginUINo
         value: sevenPct,
         max: 100,
         caption: sevenCaption,
-        tone: sevenPct >= rateLimitPct ? "error" : "ok",
+        tone: weeklyTone(sevenPct, rateLimitPct, acct.sevenDayPace),
       },
     },
     ...acct.scopedWindows.map((w): PluginUINode => ({
@@ -188,11 +259,28 @@ function buildAccountMeters(acct: PoolAccount, rateLimitPct: number): PluginUINo
         label: `#${acct.number} · ${w.name} wk`,
         value: w.pct,
         max: 100,
-        caption: quotaCaption(w.pct, w.resetClock, w.resetCountdown),
-        tone: w.pct >= rateLimitPct ? "error" : "ok",
+        caption: weeklyCaption(w.pct, w.resetClock, w.resetCountdown, w),
+        tone: weeklyTone(w.pct, rateLimitPct, w),
       },
     })),
+    ...spendNodes,
   ];
+}
+
+/** Spend meter (flat row). `value` is cswap's own `utilization`; the plugin never divides, so an
+ *  unlimited plan cannot produce a divide-by-zero — cswap omits the entry entirely instead. */
+function spendMeter(acct: PoolAccount): PluginUINode {
+  const spend = acct.spend!;
+  return {
+    type: "meter",
+    props: {
+      label: `#${acct.number} · spend`,
+      value: spend.pct,
+      max: 100,
+      caption: `${spend.used}/${spend.limit} ${spend.currency}${resetSuffix(spend.resetClock, spend.resetCountdown)}`,
+      tone: spend.pct >= 100 ? "error" : "ok",
+    },
+  };
 }
 
 /** Build the flat pool row for one account: identity + status badge + meters or unknown note.
@@ -205,8 +293,9 @@ function buildPoolAccountRow(
   rateLimitPct: number,
   showMakePrimary: boolean,
   rotationButton: PluginUINode | null,
+  richSpend: boolean,
 ): PluginUINode {
-  const header: PluginUINode[] = [identityBadge(acct), buildStatusBadge(acct, isReady)];
+  const header: PluginUINode[] = [identityBadge(acct, !richSpend), buildStatusBadge(acct, isReady)];
   if (showMakePrimary && canMakePrimary(acct)) header.push(makePrimaryButton(acct));
   if (rotationButton !== null) header.push(rotationButton);
   return {
@@ -218,8 +307,23 @@ function buildPoolAccountRow(
         props: { direction: "horizontal" },
         children: header,
       },
-      ...buildAccountMeters(acct, rateLimitPct),
+      ...buildAccountMeters(acct, rateLimitPct, richSpend),
     ],
+  };
+}
+
+/** Spend gauge (graphics section). Mirrors `spendMeter`. */
+function spendGauge(a: PoolAccount): PluginUINode {
+  const spend = a.spend!;
+  return {
+    type: "gauge",
+    props: {
+      label: `#${a.number} · spend`,
+      value: spend.pct,
+      max: 100,
+      tone: spend.pct >= 100 ? "error" : "ok",
+      caption: `${spend.used}/${spend.limit} ${spend.currency}${resetSuffix(spend.resetClock, spend.resetCountdown)}`,
+    },
   };
 }
 
@@ -229,19 +333,26 @@ function buildGraphicsAccountNode(
   a: PoolAccount,
   rateLimitPct: number,
   history: History,
+  richSpend: boolean,
 ): PluginUINode {
+  const spendNodes = richSpend && a.spend !== null ? [spendGauge(a)] : [];
   if (a.usageUnavailable) {
     return {
       type: "stack",
       props: { direction: "vertical" },
-      children: [identityBadge(a), quotaUnknownNote(a.active)],
+      children: [identityBadge(a, !richSpend), quotaUnknownNote(a.active), ...spendNodes],
     };
   }
   const fp = a.fiveHourPct ?? 0;
   const sp = a.sevenDayPct ?? 0;
   const toneFor = (pct: number) => (pct >= rateLimitPct ? "error" : "ok");
   const fiveCaption = quotaCaption(a.fiveHourPct, a.fiveHourResetClock, a.fiveHourResetCountdown);
-  const sevenCaption = quotaCaption(a.sevenDayPct, a.sevenDayResetClock, a.sevenDayResetCountdown);
+  const sevenCaption = weeklyCaption(
+    a.sevenDayPct,
+    a.sevenDayResetClock,
+    a.sevenDayResetCountdown,
+    a.sevenDayPace,
+  );
   const points = downsample(
     history.quotaFor(a.number).map((s) => s.five ?? 0),
     CHART_WINDOW,
@@ -250,7 +361,7 @@ function buildGraphicsAccountNode(
     type: "stack",
     props: { direction: "vertical" },
     children: [
-      identityBadge(a),
+      identityBadge(a, !richSpend),
       {
         type: "gauge",
         props: {
@@ -267,7 +378,7 @@ function buildGraphicsAccountNode(
           label: `#${a.number} · 7d`,
           value: sp,
           max: 100,
-          tone: toneFor(sp),
+          tone: weeklyTone(sp, rateLimitPct, a.sevenDayPace),
           caption: sevenCaption,
         },
       },
@@ -277,10 +388,11 @@ function buildGraphicsAccountNode(
           label: `#${a.number} · ${w.name} wk`,
           value: w.pct,
           max: 100,
-          tone: toneFor(w.pct),
-          caption: quotaCaption(w.pct, w.resetClock, w.resetCountdown),
+          tone: weeklyTone(w.pct, rateLimitPct, w),
+          caption: weeklyCaption(w.pct, w.resetClock, w.resetCountdown, w),
         },
       })),
+      ...spendNodes,
       {
         type: "sparkline",
         props: {
@@ -346,6 +458,29 @@ function buildRestoreFailureCallout(rf: HealRestoreFailure): PluginUINode {
 }
 
 /** Build a `settings-panel` PluginUIView with the same data as buildStatus. */
+/**
+ * Node budget for the rich (spend meter + gauge) rendering.
+ *
+ * The view's node count is an exact closed form, verified against this builder across accounts ×
+ * scoped-window combinations:
+ *
+ *   nodes(N, S) = 12 + min(N, MAX_DETAILED_ACCOUNTS) × (perAccount + 2S) + (N > 16 ? 1 : 0)
+ *   perAccount = 13 compact | 15 rich
+ *
+ * The host validator drops the ENTIRE view above MAX_NODES = 256, so the per-account budget is
+ * 256 − 12 = 244; 220 leaves ~10% headroom for future base growth. `S` is externally driven —
+ * cswap emits one weekly window per model with a per-model limit — so a fixed account threshold
+ * would silently overclaim at a different `S` (at S=8 the rich path blows the cap at 8 accounts).
+ */
+const RICH_NODE_BUDGET = 220;
+
+/** Does the rich spend rendering fit? `S` = the largest scoped-window count in the pool. */
+function useRichSpend(pool: PoolAccount[]): boolean {
+  const detailed = Math.min(pool.length, MAX_DETAILED_ACCOUNTS);
+  const s = pool.reduce((max, a) => Math.max(max, a.scopedWindows.length), 0);
+  return detailed * (15 + 2 * s) <= RICH_NODE_BUDGET;
+}
+
 export function buildUIView(
   cfg: ResolvedConfig,
   pool: PoolAccount[],
@@ -377,6 +512,11 @@ export function buildUIView(
     },
   });
 
+  // Spend renders as its own meter+gauge when the pool's measured node cost leaves room, and
+  // folds into the identity label otherwise. See `useRichSpend` for why this is derived rather
+  // than a fixed account threshold.
+  const richSpend = useRichSpend(pool);
+
   // ── Pool section ──────────────────────────────────────────────────────────
   nodes.push({ type: "text", props: { content: "Pool", weight: "bold" } });
 
@@ -392,6 +532,7 @@ export function buildUIView(
           cfg.rateLimitPct,
           cfg.makePrimaryButtons,
           rotationButtonFor(acct, cfg, outOfRotation),
+          richSpend,
         ),
       );
     }
@@ -415,7 +556,7 @@ export function buildUIView(
   nodes.push({ type: "text", props: { content: "Graphics", weight: "bold" } });
 
   for (const a of detailed) {
-    nodes.push(buildGraphicsAccountNode(a, cfg.rateLimitPct, history));
+    nodes.push(buildGraphicsAccountNode(a, cfg.rateLimitPct, history, richSpend));
   }
 
   const fivePctFor = (a: PoolAccount) => a.fiveHourPct ?? 0;

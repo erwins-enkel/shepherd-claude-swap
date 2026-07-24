@@ -1,10 +1,38 @@
 import type { ResolvedConfig } from "./config";
-import type { CswapAccount, CswapListResult, CswapScopedWindow, CswapUsageWindow } from "./cswap";
+import type {
+  CswapAccount,
+  CswapListResult,
+  CswapScopedWindow,
+  CswapSpend,
+  CswapUsageWindow,
+  CswapWeeklyWindow,
+} from "./cswap";
+
+/** Pace of a WEEKLY window (7-day or per-model), normalized for display.
+ *  cswap suppresses pace for 24h after a reset, so `expectedPct` is null whenever it is
+ *  uncomputable — and `aheadOfPace` is noise-gated upstream (needs >=15pp over expected). */
+export interface WindowPace {
+  expectedPct: number | null;
+  aheadOfPace: boolean;
+}
 
 /** A per-model weekly limit window (e.g. "Fable"), normalized for display. */
-export interface ScopedWindow {
+export interface ScopedWindow extends WindowPace {
   name: string;
   pct: number;
+  resetsAt: string | null;
+  resetClock: string | null;
+  resetCountdown: string | null;
+}
+
+/** Pay-as-you-go spend, normalized for display. Absent entirely when the account has no
+ *  such plan — that is "no plan", not "unknown", so it renders nothing rather than "n/a".
+ *  DISPLAY-ONLY: never affects usable / rateLimited / usageUnavailable. */
+export interface SpendInfo {
+  used: number;
+  limit: number;
+  pct: number;
+  currency: string;
   resetsAt: string | null;
   resetClock: string | null;
   resetCountdown: string | null;
@@ -30,6 +58,16 @@ export interface PoolAccount {
    *  Populated on EVERY classification path — including the non-ok `usageStatus` short-circuit —
    *  so `Prewarmer.inScope()` and the panel can trust it without re-deriving anything. */
   cswapDisabled: boolean;
+  /** Short operator-set label from `cswap alias` (0.21+). Null when unset. Rendered IN ADDITION
+   *  to the email, never instead of it — the email is what maps a row to its on-disk profile. */
+  alias: string | null;
+  organizationName: string | null;
+  /** Age of the usage measurement AT CSWAP'S EMIT TIME (0.23+), not since our last poll. */
+  usageAgeSeconds: number | null;
+  /** Display-only pay-as-you-go budget; null when the account has no such plan. */
+  spend: SpendInfo | null;
+  /** Display-only pace of the 7-day window. */
+  sevenDayPace: WindowPace;
   // Display-only: per-model weekly windows (e.g. Fable). Never affects usable/rateLimited/usageUnavailable.
   scopedWindows: ScopedWindow[];
 }
@@ -65,6 +103,11 @@ function windowDisplay(w: CswapUsageWindow | undefined): {
   };
 }
 
+/** Pace fields of a weekly window. Absent/uncomputable ⇒ null expected, not-ahead. */
+function windowPace(w: CswapWeeklyWindow | undefined): WindowPace {
+  return { expectedPct: w?.expectedPct ?? null, aheadOfPace: w?.aheadOfPace === true };
+}
+
 /** Per-model weekly windows, normalized for display. Display-only — never affects usability. */
 function toScopedWindows(scoped: CswapScopedWindow[] | undefined): ScopedWindow[] {
   return (scoped ?? []).map((w) => ({
@@ -73,7 +116,24 @@ function toScopedWindows(scoped: CswapScopedWindow[] | undefined): ScopedWindow[
     resetsAt: w.resetsAt ?? null,
     resetClock: w.clock ?? null,
     resetCountdown: w.countdown ?? null,
+    ...windowPace(w),
   }));
+}
+
+/** Pay-as-you-go spend, normalized. Null when cswap reports no plan (unlimited plans are
+ *  omitted upstream, so `limit` is never a meaningless 0 here). */
+function toSpend(spend: CswapSpend | undefined): SpendInfo | null {
+  if (spend === undefined) return null;
+  return {
+    used: spend.used,
+    limit: spend.limit,
+    // cswap's own `utilization`, NOT used/limit — a live account reports 100.33/100.00 at pct 100.
+    pct: spend.pct,
+    currency: spend.currency,
+    resetsAt: spend.resetsAt ?? null,
+    resetClock: spend.clock ?? null,
+    resetCountdown: spend.countdown ?? null,
+  };
 }
 
 /** At/over the configured limit on either window. A null pct never trips it. */
@@ -153,6 +213,11 @@ export function classifyPool(
       // above the cswap-disabled gate — carries it. `inScope()` and the panel marker depend on
       // that: a parked account whose usage fetch failed must still read as parked.
       cswapDisabled: acct.disabled === true,
+      alias: acct.alias ?? null,
+      organizationName: acct.organizationName ?? null,
+      usageAgeSeconds: acct.usageAgeSeconds ?? null,
+      spend: toSpend(acct.usage?.spend),
+      sevenDayPace: windowPace(acct.usage?.sevenDay),
       scopedWindows: toScopedWindows(acct.usage?.scoped),
       ...classifyVerdict(acct, cfg, outOfRotation, five.pct, seven.pct),
     };

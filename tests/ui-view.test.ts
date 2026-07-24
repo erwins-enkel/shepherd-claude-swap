@@ -1,12 +1,18 @@
 import { describe, expect, it } from "bun:test";
 import { buildUIView } from "../src/ui-view";
 import type { PluginUINode } from "../types";
-import type { PoolAccount } from "../src/accounts";
+import type { PoolAccount, SpendInfo } from "../src/accounts";
 import type { SelectionState } from "../src/selection";
 import type { LastSpawn } from "../src/status";
 import type { HealRecord, HealRestoreFailure } from "../src/prewarm";
 import { parseConfig } from "../src/config";
-import { History, CHART_WINDOW, MAX_DETAILED_ACCOUNTS } from "../src/history";
+import {
+  History,
+  CHART_WINDOW,
+  MAX_DETAILED_ACCOUNTS,
+  QUOTA_RING_CAP,
+  SPAWN_RING_CAP,
+} from "../src/history";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -30,6 +36,11 @@ function makeAccount(number: number, opts: Partial<PoolAccount> = {}): PoolAccou
     active: true,
     usageUnavailable: false,
     cswapDisabled: false,
+    alias: null,
+    organizationName: null,
+    usageAgeSeconds: null,
+    spend: null,
+    sevenDayPace: { expectedPct: null, aheadOfPace: false },
     scopedWindows: [],
     ...opts,
   };
@@ -306,6 +317,11 @@ describe("buildUIView — quota-unknown account", () => {
       active: false,
       usageUnavailable: true,
       cswapDisabled: false,
+      alias: null,
+      organizationName: null,
+      usageAgeSeconds: null,
+      spend: null,
+      sevenDayPace: { expectedPct: null, aheadOfPace: false },
       fiveHourPct: null,
       sevenDayPct: null,
     }),
@@ -413,6 +429,11 @@ describe("buildUIView — primary account (active: true)", () => {
         active: true,
         usageUnavailable: true,
         cswapDisabled: false,
+        alias: null,
+        organizationName: null,
+        usageAgeSeconds: null,
+        spend: null,
+        sevenDayPace: { expectedPct: null, aheadOfPace: false },
         fiveHourPct: null,
         sevenDayPct: null,
       }),
@@ -431,6 +452,11 @@ describe("buildUIView — primary account (active: true)", () => {
         active: true,
         usageUnavailable: true,
         cswapDisabled: false,
+        alias: null,
+        organizationName: null,
+        usageAgeSeconds: null,
+        spend: null,
+        sevenDayPace: { expectedPct: null, aheadOfPace: false },
         fiveHourPct: null,
         sevenDayPct: null,
       }),
@@ -819,6 +845,11 @@ const pickerPool: PoolAccount[] = [
     sevenDayPct: null,
     usageUnavailable: true,
     cswapDisabled: false,
+    alias: null,
+    organizationName: null,
+    usageAgeSeconds: null,
+    spend: null,
+    sevenDayPace: { expectedPct: null, aheadOfPace: false },
   }), // quota-unknown but usable — INTENTIONALLY eligible
 ];
 const pickerReady = new Set([2]);
@@ -1017,6 +1048,8 @@ describe("buildUIView — scoped weekly windows", () => {
             resetsAt: "2026-07-08T08:59:00.000Z",
             resetClock: "Jul 8 08:59",
             resetCountdown: "3d 22h",
+            expectedPct: null,
+            aheadOfPace: false,
           },
         ],
       }),
@@ -1039,7 +1072,15 @@ describe("buildUIView — scoped weekly windows", () => {
     const scopedPool = [
       makeAccount(2, {
         scopedWindows: [
-          { name: "Fable", pct: 39, resetsAt: null, resetClock: null, resetCountdown: null },
+          {
+            name: "Fable",
+            pct: 39,
+            resetsAt: null,
+            resetClock: null,
+            resetCountdown: null,
+            expectedPct: null,
+            aheadOfPace: false,
+          },
         ],
       }),
     ];
@@ -1054,12 +1095,28 @@ describe("buildUIView — scoped weekly windows", () => {
     const scopedPool = [
       makeAccount(3, {
         scopedWindows: [
-          { name: "Fable", pct: 85, resetsAt: null, resetClock: null, resetCountdown: null },
+          {
+            name: "Fable",
+            pct: 85,
+            resetsAt: null,
+            resetClock: null,
+            resetCountdown: null,
+            expectedPct: null,
+            aheadOfPace: false,
+          },
         ],
       }),
       makeAccount(4, {
         scopedWindows: [
-          { name: "Fable", pct: 10, resetsAt: null, resetClock: null, resetCountdown: null },
+          {
+            name: "Fable",
+            pct: 10,
+            resetsAt: null,
+            resetClock: null,
+            resetCountdown: null,
+            expectedPct: null,
+            aheadOfPace: false,
+          },
         ],
       }),
     ];
@@ -1280,5 +1337,483 @@ describe("buildUIView — cswap-disabled rows", () => {
       null,
     );
     expect(identityLabels(v.root).some((l) => l.includes("cswap-disabled"))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 0.23 display fields: spend, pace, usage age, alias/org labels.
+// ---------------------------------------------------------------------------
+
+const SPEND: SpendInfo = {
+  used: 100.33,
+  limit: 100,
+  pct: 100,
+  currency: "EUR",
+  resetsAt: null,
+  resetClock: null,
+  resetCountdown: null,
+};
+
+/** Every meter/gauge caption in the view. */
+function captions(root: PluginUINode): string[] {
+  return [...findByType(root, "meter"), ...findByType(root, "gauge")].map((n) =>
+    String(n.props?.["caption"] ?? ""),
+  );
+}
+
+/** Labels of every meter/gauge in the view. */
+function widgetLabels(root: PluginUINode): string[] {
+  return [...findByType(root, "meter"), ...findByType(root, "gauge")].map((n) =>
+    String(n.props?.["label"] ?? ""),
+  );
+}
+
+describe("buildUIView — spend", () => {
+  it("renders a spend meter and gauge for a small pool", () => {
+    const v = buildUIView(
+      cfg,
+      [makeAccount(1, { spend: SPEND })],
+      new Set(),
+      baseState,
+      null,
+      null,
+    );
+    expect(widgetLabels(v.root).filter((l) => l.includes("· spend")).length).toBe(2);
+    expect(captions(v.root).some((c) => c.includes("100.33/100 EUR"))).toBe(true);
+  });
+
+  it("uses cswap's pct verbatim rather than used/limit", () => {
+    // used/limit would read 100.33% — the plugin must never divide.
+    const v = buildUIView(
+      cfg,
+      [makeAccount(1, { spend: SPEND })],
+      new Set(),
+      baseState,
+      null,
+      null,
+    );
+    const spendWidgets = [...findByType(v.root, "meter"), ...findByType(v.root, "gauge")].filter(
+      (n) => String(n.props?.["label"]).includes("· spend"),
+    );
+    expect(spendWidgets.length).toBeGreaterThan(0);
+    for (const w of spendWidgets) expect(w.props?.["value"]).toBe(100);
+  });
+
+  it("tones a maxed spend budget as error", () => {
+    const v = buildUIView(
+      cfg,
+      [makeAccount(1, { spend: SPEND })],
+      new Set(),
+      baseState,
+      null,
+      null,
+    );
+    const w = [...findByType(v.root, "meter")].find((n) =>
+      String(n.props?.["label"]).includes("· spend"),
+    );
+    expect(w?.props?.["tone"]).toBe("error");
+  });
+
+  it("renders nothing at all when the account has no spend plan", () => {
+    const v = buildUIView(cfg, [makeAccount(1)], new Set(), baseState, null, null);
+    expect(widgetLabels(v.root).some((l) => l.includes("· spend"))).toBe(false);
+    // "no plan" is not "unknown" — there must be no n/a placeholder either.
+    expect(collectTypes(v.root).join()).not.toContain("spend");
+  });
+
+  it("still renders spend on a quota-unknown row — a different, known axis", () => {
+    const v = buildUIView(
+      cfg,
+      [
+        makeAccount(1, {
+          usageUnavailable: true,
+          fiveHourPct: null,
+          sevenDayPct: null,
+          spend: SPEND,
+        }),
+      ],
+      new Set(),
+      baseState,
+      null,
+      null,
+    );
+    expect(widgetLabels(v.root).filter((l) => l.includes("· spend")).length).toBe(2);
+    expect(
+      findByType(v.root, "text").some((t) =>
+        String(t.props?.["content"]).includes("quota unknown"),
+      ),
+    ).toBe(true);
+  });
+
+  it("folds spend into the identity label when the pool is too large for widgets", () => {
+    // 16 accounts × 4 scoped windows: 16 × (15 + 8) = 368 > RICH_NODE_BUDGET.
+    const big = Array.from({ length: 16 }, (_, i) =>
+      makeAccount(i + 1, {
+        active: false,
+        spend: SPEND,
+        scopedWindows: ["A", "B", "C", "D"].map((name) => ({
+          name,
+          pct: 10,
+          resetsAt: null,
+          resetClock: null,
+          resetCountdown: null,
+          expectedPct: null,
+          aheadOfPace: false,
+        })),
+      }),
+    );
+    const v = buildUIView(cfg, big, new Set(), baseState, null, null);
+    expect(widgetLabels(v.root).some((l) => l.includes("· spend"))).toBe(false);
+    const badges = findByType(v.root, "badge").map((b) => String(b.props?.["label"] ?? ""));
+    expect(badges.some((l) => l.includes("spend 100%"))).toBe(true);
+  });
+});
+
+describe("buildUIView — pace", () => {
+  const ahead = { expectedPct: 36.7, aheadOfPace: true };
+
+  it("annotates an ahead-of-pace 7-day window and lifts its tone to warn", () => {
+    const v = buildUIView(
+      cfg,
+      [makeAccount(1, { sevenDayPct: 94, sevenDayPace: ahead })],
+      new Set(),
+      baseState,
+      null,
+      null,
+    );
+    expect(captions(v.root).some((c) => c.includes("ahead of pace") && c.includes("36.7%"))).toBe(
+      true,
+    );
+    const sevenDay = findByType(v.root, "meter").find((n) =>
+      String(n.props?.["label"]).includes("· 7d"),
+    );
+    expect(sevenDay?.props?.["tone"]).toBe("warn");
+  });
+
+  it("does not annotate a window that is on pace", () => {
+    const v = buildUIView(
+      cfg,
+      [makeAccount(1, { sevenDayPct: 50 })],
+      new Set(),
+      baseState,
+      null,
+      null,
+    );
+    expect(captions(v.root).some((c) => c.includes("ahead of pace"))).toBe(false);
+  });
+
+  it("keeps error tone when a window is BOTH ahead of pace and at the limit", () => {
+    const v = buildUIView(
+      cfg,
+      [makeAccount(1, { sevenDayPct: 100, sevenDayPace: ahead })],
+      new Set(),
+      baseState,
+      null,
+      null,
+    );
+    const sevenDay = findByType(v.root, "meter").find((n) =>
+      String(n.props?.["label"]).includes("· 7d"),
+    );
+    expect(sevenDay?.props?.["tone"]).toBe("error");
+  });
+
+  it("annotates scoped weekly windows too", () => {
+    const v = buildUIView(
+      cfg,
+      [
+        makeAccount(1, {
+          scopedWindows: [
+            {
+              name: "Fable",
+              pct: 80,
+              resetsAt: null,
+              resetClock: null,
+              resetCountdown: null,
+              ...ahead,
+            },
+          ],
+        }),
+      ],
+      new Set(),
+      baseState,
+      null,
+      null,
+    );
+    const fable = findByType(v.root, "meter").find((n) =>
+      String(n.props?.["label"]).includes("Fable"),
+    );
+    expect(String(fable?.props?.["caption"])).toContain("ahead of pace");
+    expect(fable?.props?.["tone"]).toBe("warn");
+  });
+});
+
+describe("buildUIView — usage freshness", () => {
+  const label = (ageSeconds: number | null): string =>
+    findByType(
+      buildUIView(
+        cfg,
+        [makeAccount(1, { usageAgeSeconds: ageSeconds })],
+        new Set(),
+        baseState,
+        null,
+        null,
+      ).root,
+      "badge",
+    )
+      .map((b) => String(b.props?.["label"] ?? ""))
+      .find((l) => l.startsWith("#1")) ?? "";
+
+  it("stays silent below the 300s threshold", () => {
+    expect(label(299)).not.toContain("usage");
+    expect(label(0)).not.toContain("usage");
+  });
+
+  it("stays silent when the age is unknown", () => {
+    expect(label(null)).not.toContain("usage");
+  });
+
+  it("reports above the threshold, qualified as of the last refresh", () => {
+    expect(label(301)).toContain("usage 5m old (at last refresh)");
+  });
+
+  it("switches to hours for a long-stale measurement", () => {
+    expect(label(2 * 3600)).toContain("usage 2h old (at last refresh)");
+  });
+
+  it("does not depend on refreshIntervalMs — that is a different clock", () => {
+    // usageAgeSeconds measures how long cswap has served a stale snapshot; refreshIntervalMs is
+    // how often we re-read it. Deriving the threshold from cfg could only ever suppress.
+    const slow = parseConfig({ refreshIntervalMs: 3_600_000 });
+    const v = buildUIView(
+      slow,
+      [makeAccount(1, { usageAgeSeconds: 600 })],
+      new Set(),
+      baseState,
+      null,
+      null,
+    );
+    const badge = findByType(v.root, "badge")
+      .map((b) => String(b.props?.["label"] ?? ""))
+      .find((l) => l.startsWith("#1"));
+    expect(badge).toContain("usage 10m old");
+  });
+});
+
+describe("buildUIView — identity labels", () => {
+  it("renders an alias alongside the email, never instead of it", () => {
+    // The email maps a row to its on-disk profile (sessions/<n>-<slug>/), so it must survive.
+    const v = buildUIView(
+      cfg,
+      [makeAccount(1, { alias: "devbox" })],
+      new Set(),
+      baseState,
+      null,
+      null,
+    );
+    const badge = findByType(v.root, "badge")
+      .map((b) => String(b.props?.["label"] ?? ""))
+      .find((l) => l.startsWith("#1"));
+    expect(badge).toContain("devbox (acct1@example.com)");
+  });
+
+  it("appends the organisation, which disambiguates accounts sharing an email", () => {
+    const pool2 = [
+      makeAccount(1, { active: false, email: "same@example.com", organizationName: "Org A" }),
+      makeAccount(2, { active: false, email: "same@example.com", organizationName: "Org B" }),
+    ];
+    const v = buildUIView(cfg, pool2, new Set(), baseState, null, null);
+    const badges = findByType(v.root, "badge").map((b) => String(b.props?.["label"] ?? ""));
+    expect(badges.some((l) => l.startsWith("#1") && l.includes("Org A"))).toBe(true);
+    expect(badges.some((l) => l.startsWith("#2") && l.includes("Org B"))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Validator budget — a GRID over accounts × scoped windows, not a hand-picked
+// worst case.
+//
+// The host drops the ENTIRE view if any of four caps is exceeded, and the node
+// count is a closed form in BOTH dimensions:
+//
+//   nodes(N, S) = BASE + min(N,16) × (perAccount + 2S) + (N > 16 ? 1 : 0)
+//   perAccount = 13 compact | 15 rich (spend meter + gauge)
+//   BASE = 10 with no last-spawn / heal / error nodes; each of those adds its own on top.
+//
+// `S` is externally driven (cswap emits one weekly window per model), so any
+// claim pinned at a single S is an overclaim — which is exactly the flaw in the
+// shipped 40-account fixture below (it runs at S=0, the cheapest column).
+// ---------------------------------------------------------------------------
+
+const MAX_NODES = 256;
+const MAX_ARRAY = 500;
+const MAX_DEPTH = 16;
+const MAX_BYTES = 64 * 1024;
+
+/** A pool of N accounts each carrying S scoped weekly windows, all display fields populated. */
+function gridPool(n: number, s: number): PoolAccount[] {
+  return Array.from({ length: n }, (_, i) =>
+    makeAccount(i + 1, {
+      active: false,
+      fiveHourPct: 50,
+      sevenDayPct: 60,
+      alias: `account-alias-${i + 1}`,
+      organizationName: `Example Organisation Number ${i + 1}`,
+      usageAgeSeconds: 7200,
+      spend: SPEND,
+      sevenDayPace: { expectedPct: 36.7, aheadOfPace: true },
+      scopedWindows: Array.from({ length: s }, (_, j) => ({
+        name: `Model${j}`,
+        pct: 10,
+        resetsAt: null,
+        resetClock: "Jul 29 08:59",
+        resetCountdown: "4d 10h",
+        expectedPct: 36.7,
+        aheadOfPace: true,
+      })),
+    }),
+  );
+}
+
+/** History filled to its retention caps — that is what populates the charts. */
+function fullHistory(pool: PoolAccount[]): History {
+  const h = new History();
+  for (let i = 0; i < QUOTA_RING_CAP; i++) {
+    h.recordQuota(
+      pool.slice(0, MAX_DETAILED_ACCOUNTS).map((a) => ({ ...a, fiveHourPct: i % 100 })),
+    );
+  }
+  for (let i = 0; i < SPAWN_RING_CAP; i++) {
+    h.recordSpawn({
+      sessionId: `session-${i}`,
+      accountNumber: (i % MAX_DETAILED_ACCOUNTS) + 1,
+      at: new Date(i * 1000).toISOString(),
+    });
+  }
+  return h;
+}
+
+describe("buildUIView — four-cap budget grid", () => {
+  const ACCOUNTS = [1, 3, 8, 12, 14, 16, 17, 20, 40];
+  const WINDOWS = [0, 1, 2, 3, 4, 6, 8];
+
+  /** Predicted node count; the closed form the rich/compact switch is derived from. */
+  const BASE_NODES = 10; // with no last-spawn / heal / error sections present
+  const predict = (n: number, s: number, rich: boolean): number =>
+    BASE_NODES +
+    Math.min(n, MAX_DETAILED_ACCOUNTS) * ((rich ? 15 : 13) + 2 * s) +
+    (n > MAX_DETAILED_ACCOUNTS ? 1 : 0);
+
+  it("node count matches the closed form for every combination", () => {
+    for (const n of ACCOUNTS) {
+      for (const s of WINDOWS) {
+        const pool = gridPool(n, s);
+        const v = buildUIView(cfg, pool, new Set(), baseState, null, null, fullHistory(pool));
+        const isRich = widgetLabels(v.root).some((l) => l.includes("· spend"));
+        expect({ n, s, nodes: treeStats(v.root).nodeCount }).toEqual({
+          n,
+          s,
+          nodes: predict(n, s, isRich),
+        });
+      }
+    }
+  });
+
+  it("every combination the switch admits to the rich path stays inside all four caps", () => {
+    for (const n of ACCOUNTS) {
+      for (const s of WINDOWS) {
+        const pool = gridPool(n, s);
+        const v = buildUIView(cfg, pool, new Set(), baseState, null, null, fullHistory(pool));
+        if (!widgetLabels(v.root).some((l) => l.includes("· spend"))) continue; // compact path
+        const stats = treeStats(v.root);
+        expect({ n, s, over: stats.nodeCount > MAX_NODES }).toEqual({ n, s, over: false });
+        expect(stats.maxArrayLen).toBeLessThanOrEqual(MAX_ARRAY);
+        expect(stats.depth).toBeLessThanOrEqual(MAX_DEPTH);
+        expect(Buffer.byteLength(JSON.stringify(v), "utf8")).toBeLessThanOrEqual(MAX_BYTES);
+      }
+    }
+  });
+
+  it("no over-cap combination is caused by the spend rendering", () => {
+    // The load-bearing claim: every combination that blows the cap would ALSO blow it on the
+    // compact path, i.e. it is caused by the pre-existing per-scoped-window meter+gauge, not by
+    // anything added here. Asserted as a property rather than a pasted list, so it cannot be
+    // satisfied by simply copying whatever the code currently produces.
+    const compactNodes = (n: number, s: number): number =>
+      12 + Math.min(n, MAX_DETAILED_ACCOUNTS) * (13 + 2 * s) + (n > MAX_DETAILED_ACCOUNTS ? 1 : 0);
+
+    const causedByUs: string[] = [];
+    for (const n of ACCOUNTS) {
+      for (const s of WINDOWS) {
+        const pool = gridPool(n, s);
+        const v = buildUIView(cfg, pool, new Set(), baseState, null, null, fullHistory(pool));
+        if (treeStats(v.root).nodeCount > MAX_NODES && compactNodes(n, s) <= MAX_NODES) {
+          causedByUs.push(`${n}x${s}`);
+        }
+      }
+    }
+    expect(causedByUs).toEqual([]);
+  });
+
+  it("over-cap combinations are exactly the known pre-existing set, so a new one fails here", () => {
+    // Tracked as a follow-up: >=2 scoped weekly windows blows the cap well below the 16-account
+    // truncation limit. Pinned explicitly so a newly introduced overflow cannot blend in.
+    const over: string[] = [];
+    for (const n of ACCOUNTS) {
+      for (const s of WINDOWS) {
+        const pool = gridPool(n, s);
+        const v = buildUIView(cfg, pool, new Set(), baseState, null, null, fullHistory(pool));
+        if (treeStats(v.root).nodeCount > MAX_NODES) over.push(`${n}x${s}`);
+      }
+    }
+    expect(over).toEqual([
+      "12x4",
+      "12x6",
+      "12x8",
+      "14x3",
+      "14x4",
+      "14x6",
+      "14x8",
+      "16x2",
+      "16x3",
+      "16x4",
+      "16x6",
+      "16x8",
+      "17x2",
+      "17x3",
+      "17x4",
+      "17x6",
+      "17x8",
+      "20x2",
+      "20x3",
+      "20x4",
+      "20x6",
+      "20x8",
+      "40x2",
+      "40x3",
+      "40x4",
+      "40x6",
+      "40x8",
+    ]);
+  });
+
+  it("compact worst case (17 accounts, worst-case labels) stays inside all four caps", () => {
+    const pool = gridPool(17, 1);
+    const v = buildUIView(cfg, pool, new Set(), baseState, null, "boom", fullHistory(pool));
+    const stats = treeStats(v.root);
+    expect(stats.nodeCount).toBeLessThanOrEqual(MAX_NODES);
+    expect(stats.maxArrayLen).toBeLessThanOrEqual(MAX_ARRAY);
+    expect(stats.depth).toBeLessThanOrEqual(MAX_DEPTH);
+    expect(Buffer.byteLength(JSON.stringify(v), "utf8")).toBeLessThanOrEqual(MAX_BYTES);
+  });
+
+  it("rich boundary (8 accounts, 4 windows) stays inside all four caps", () => {
+    const pool = gridPool(8, 4);
+    const v = buildUIView(cfg, pool, new Set(), baseState, null, "boom", fullHistory(pool));
+    expect(widgetLabels(v.root).some((l) => l.includes("· spend"))).toBe(true);
+    const stats = treeStats(v.root);
+    expect(stats.nodeCount).toBeLessThanOrEqual(MAX_NODES);
+    expect(stats.maxArrayLen).toBeLessThanOrEqual(MAX_ARRAY);
+    expect(stats.depth).toBeLessThanOrEqual(MAX_DEPTH);
+    expect(Buffer.byteLength(JSON.stringify(v), "utf8")).toBeLessThanOrEqual(MAX_BYTES);
   });
 });

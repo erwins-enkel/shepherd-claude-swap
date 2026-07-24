@@ -24,6 +24,11 @@ function makeAccount(number: number, opts: Partial<PoolAccount> = {}): PoolAccou
     active: true,
     usageUnavailable: false,
     cswapDisabled: false,
+    alias: null,
+    organizationName: null,
+    usageAgeSeconds: null,
+    spend: null,
+    sevenDayPace: { expectedPct: null, aheadOfPace: false },
     scopedWindows: [],
     ...opts,
   };
