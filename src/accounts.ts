@@ -123,7 +123,9 @@ function toScopedWindows(scoped: CswapScopedWindow[] | undefined): ScopedWindow[
 /** Pay-as-you-go spend, normalized. Null when cswap reports no plan (unlimited plans are
  *  omitted upstream, so `limit` is never a meaningless 0 here). */
 function toSpend(spend: CswapSpend | undefined): SpendInfo | null {
-  if (spend === undefined) return null;
+  // Nullish, not just undefined: `Cswap.list()` casts unvalidated JSON, so an explicit null here
+  // would otherwise reach the property reads below.
+  if (spend === undefined || spend === null) return null;
   return {
     used: spend.used,
     limit: spend.limit,

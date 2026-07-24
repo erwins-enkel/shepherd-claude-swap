@@ -16,6 +16,7 @@ import { History, downsample, CHART_WINDOW, MAX_DETAILED_ACCOUNTS } from "./hist
  *  hint that `cswap enable <n>` is the lever. This label renders unconditionally on every row, in
  *  both the flat and graphical sections, and costs no extra node. */
 function identityBadge(acct: PoolAccount, spendInline: boolean): PluginUINode {
+  const age = usageAgeLabel(acct.usageAgeSeconds);
   const segments = [
     // The email is ALWAYS rendered, even when an alias is set: this badge is the only place the
     // panel shows it, and it is what maps a row to its on-disk profile
@@ -24,9 +25,7 @@ function identityBadge(acct: PoolAccount, spendInline: boolean): PluginUINode {
     ...(acct.cswapDisabled ? ["cswap-disabled"] : []),
     ...(acct.organizationName !== null ? [acct.organizationName] : []),
     ...(spendInline && acct.spend !== null ? [spendSegment(acct.spend)] : []),
-    ...(usageAgeLabel(acct.usageAgeSeconds) !== null
-      ? [`usage ${usageAgeLabel(acct.usageAgeSeconds)} old (at last refresh)`]
-      : []),
+    ...(age !== null ? [`usage ${age} old (at last refresh)`] : []),
   ];
   return {
     type: "badge",
@@ -217,7 +216,7 @@ function buildAccountMeters(
 ): PluginUINode[] {
   // Spend is a DIFFERENT axis from the 5h/7d quota windows and can be known while they are not,
   // so a quota-unknown row still shows it rather than hiding real information.
-  const spendNodes = richSpend && acct.spend !== null ? [spendMeter(acct)] : [];
+  const spendNodes = richSpend && acct.spend !== null ? [spendMeter(acct.number, acct.spend)] : [];
   if (acct.usageUnavailable) return [quotaUnknownNote(acct.active), ...spendNodes];
   const fivePct = acct.fiveHourPct ?? 0;
   const sevenPct = acct.sevenDayPct ?? 0;
@@ -269,12 +268,11 @@ function buildAccountMeters(
 
 /** Spend meter (flat row). `value` is cswap's own `utilization`; the plugin never divides, so an
  *  unlimited plan cannot produce a divide-by-zero — cswap omits the entry entirely instead. */
-function spendMeter(acct: PoolAccount): PluginUINode {
-  const spend = acct.spend!;
+function spendMeter(accountNumber: number, spend: SpendInfo): PluginUINode {
   return {
     type: "meter",
     props: {
-      label: `#${acct.number} · spend`,
+      label: `#${accountNumber} · spend`,
       value: spend.pct,
       max: 100,
       caption: `${spend.used}/${spend.limit} ${spend.currency}${resetSuffix(spend.resetClock, spend.resetCountdown)}`,
@@ -313,12 +311,11 @@ function buildPoolAccountRow(
 }
 
 /** Spend gauge (graphics section). Mirrors `spendMeter`. */
-function spendGauge(a: PoolAccount): PluginUINode {
-  const spend = a.spend!;
+function spendGauge(accountNumber: number, spend: SpendInfo): PluginUINode {
   return {
     type: "gauge",
     props: {
-      label: `#${a.number} · spend`,
+      label: `#${accountNumber} · spend`,
       value: spend.pct,
       max: 100,
       tone: spend.pct >= 100 ? "error" : "ok",
@@ -335,7 +332,7 @@ function buildGraphicsAccountNode(
   history: History,
   richSpend: boolean,
 ): PluginUINode {
-  const spendNodes = richSpend && a.spend !== null ? [spendGauge(a)] : [];
+  const spendNodes = richSpend && a.spend !== null ? [spendGauge(a.number, a.spend)] : [];
   if (a.usageUnavailable) {
     return {
       type: "stack",
@@ -474,11 +471,13 @@ function buildRestoreFailureCallout(rf: HealRestoreFailure): PluginUINode {
  */
 const RICH_NODE_BUDGET = 220;
 
-/** Does the rich spend rendering fit? `S` = the largest scoped-window count in the pool. */
+/** Does the rich spend rendering fit? `S` is the largest scoped-window count among the accounts
+ *  that are actually RENDERED — beyond `MAX_DETAILED_ACCOUNTS` the surplus collapses into a single
+ *  "+N more accounts" node and costs nothing per window, so counting those would under-render. */
 function useRichSpend(pool: PoolAccount[]): boolean {
-  const detailed = Math.min(pool.length, MAX_DETAILED_ACCOUNTS);
-  const s = pool.reduce((max, a) => Math.max(max, a.scopedWindows.length), 0);
-  return detailed * (15 + 2 * s) <= RICH_NODE_BUDGET;
+  const rendered = pool.slice(0, MAX_DETAILED_ACCOUNTS);
+  const s = rendered.reduce((max, a) => Math.max(max, a.scopedWindows.length), 0);
+  return rendered.length * (15 + 2 * s) <= RICH_NODE_BUDGET;
 }
 
 export function buildUIView(
