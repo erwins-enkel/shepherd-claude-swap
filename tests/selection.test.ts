@@ -38,7 +38,7 @@ const emptyState: SelectionState = { cursor: 0, assignments: {} };
 
 describe("assign — new session — abort when no eligible", () => {
   it("empty pool → abort", () => {
-    const result = assign(emptyState, "s1", [], new Set(), "round-robin", new Set<number>());
+    const result = assign(emptyState, "s1", [], new Set(), "round-robin", new Map());
     expect(result.kind).toBe("abort");
     if (result.kind === "abort") {
       expect(result.reason.length).toBeGreaterThan(0);
@@ -48,7 +48,7 @@ describe("assign — new session — abort when no eligible", () => {
 
   it("pool has accounts but none are ready → abort", () => {
     const pool = [makeAccount(1), makeAccount(2)];
-    const result = assign(emptyState, "s1", pool, new Set(), "round-robin", new Set<number>());
+    const result = assign(emptyState, "s1", pool, new Set(), "round-robin", new Map());
     expect(result.kind).toBe("abort");
     if (result.kind === "abort") {
       expect(result.nextState).toBe(emptyState);
@@ -60,27 +60,13 @@ describe("assign — new session — abort when no eligible", () => {
       makeAccount(1, { usable: false, reason: "api_key" }),
       makeAccount(2, { usable: false, reason: "token_expired" }),
     ];
-    const result = assign(
-      emptyState,
-      "s1",
-      pool,
-      new Set([1, 2]),
-      "round-robin",
-      new Set<number>(),
-    );
+    const result = assign(emptyState, "s1", pool, new Set([1, 2]), "round-robin", new Map());
     expect(result.kind).toBe("abort");
   });
 
   it("all accounts rate-limited → abort", () => {
     const pool = [makeAccount(1, { rateLimited: true }), makeAccount(2, { rateLimited: true })];
-    const result = assign(
-      emptyState,
-      "s1",
-      pool,
-      new Set([1, 2]),
-      "round-robin",
-      new Set<number>(),
-    );
+    const result = assign(emptyState, "s1", pool, new Set([1, 2]), "round-robin", new Map());
     expect(result.kind).toBe("abort");
   });
 
@@ -89,14 +75,7 @@ describe("assign — new session — abort when no eligible", () => {
       makeAccount(1, { usable: false, reason: "api_key" }),
       makeAccount(2, { rateLimited: true }),
     ];
-    const result = assign(
-      emptyState,
-      "s1",
-      pool,
-      new Set([1, 2]),
-      "round-robin",
-      new Set<number>(),
-    );
+    const result = assign(emptyState, "s1", pool, new Set([1, 2]), "round-robin", new Map());
     expect(result.kind).toBe("abort");
   });
 });
@@ -108,7 +87,7 @@ describe("assign — new session — abort when no eligible", () => {
 describe("assign — new session — assigned", () => {
   it("single eligible account → assigned with that account", () => {
     const pool = [makeAccount(1)];
-    const result = assign(emptyState, "s1", pool, new Set([1]), "round-robin", new Set<number>());
+    const result = assign(emptyState, "s1", pool, new Set([1]), "round-robin", new Map());
     expect(result.kind).toBe("assigned");
     if (result.kind === "assigned") {
       expect(result.accountNumber).toBe(1);
@@ -117,21 +96,21 @@ describe("assign — new session — assigned", () => {
 
   it("assigned: nextState has sessionId pinned", () => {
     const pool = [makeAccount(1)];
-    const result = assign(emptyState, "s1", pool, new Set([1]), "round-robin", new Set<number>());
+    const result = assign(emptyState, "s1", pool, new Set([1]), "round-robin", new Map());
     expect(result.kind).toBe("assigned");
     expect(result.nextState.assignments["s1"]).toBe(1);
   });
 
   it("assigned: cursor advances by 1", () => {
     const pool = [makeAccount(1)];
-    const result = assign(emptyState, "s1", pool, new Set([1]), "round-robin", new Set<number>());
+    const result = assign(emptyState, "s1", pool, new Set([1]), "round-robin", new Map());
     expect(result.nextState.cursor).toBe(1);
   });
 
   it("skips non-ready accounts in round-robin", () => {
     // acct 1 is ready; acct 2 is not ready
     const pool = [makeAccount(1), makeAccount(2)];
-    const result = assign(emptyState, "s1", pool, new Set([1]), "round-robin", new Set<number>());
+    const result = assign(emptyState, "s1", pool, new Set([1]), "round-robin", new Map());
     expect(result.kind).toBe("assigned");
     if (result.kind === "assigned") {
       expect(result.accountNumber).toBe(1);
@@ -140,14 +119,7 @@ describe("assign — new session — assigned", () => {
 
   it("skips non-usable accounts in round-robin", () => {
     const pool = [makeAccount(1, { usable: false, reason: "api_key" }), makeAccount(2)];
-    const result = assign(
-      emptyState,
-      "s1",
-      pool,
-      new Set([1, 2]),
-      "round-robin",
-      new Set<number>(),
-    );
+    const result = assign(emptyState, "s1", pool, new Set([1, 2]), "round-robin", new Map());
     expect(result.kind).toBe("assigned");
     if (result.kind === "assigned") {
       expect(result.accountNumber).toBe(2);
@@ -156,14 +128,7 @@ describe("assign — new session — assigned", () => {
 
   it("skips rate-limited accounts in round-robin", () => {
     const pool = [makeAccount(1, { rateLimited: true }), makeAccount(2)];
-    const result = assign(
-      emptyState,
-      "s1",
-      pool,
-      new Set([1, 2]),
-      "round-robin",
-      new Set<number>(),
-    );
+    const result = assign(emptyState, "s1", pool, new Set([1, 2]), "round-robin", new Map());
     expect(result.kind).toBe("assigned");
     if (result.kind === "assigned") {
       expect(result.accountNumber).toBe(2);
@@ -180,10 +145,10 @@ describe("assign — new session — round-robin spread", () => {
     const pool = [makeAccount(1), makeAccount(2)];
     const ready = new Set([1, 2]);
 
-    const r1 = assign(emptyState, "s1", pool, ready, "round-robin", new Set<number>());
+    const r1 = assign(emptyState, "s1", pool, ready, "round-robin", new Map());
     expect(r1.kind).toBe("assigned");
 
-    const r2 = assign(r1.nextState, "s2", pool, ready, "round-robin", new Set<number>());
+    const r2 = assign(r1.nextState, "s2", pool, ready, "round-robin", new Map());
     expect(r2.kind).toBe("assigned");
 
     // They should be different accounts
@@ -197,10 +162,10 @@ describe("assign — new session — round-robin spread", () => {
     const pool = [makeAccount(1), makeAccount(2), makeAccount(3)];
     const ready = new Set([1, 2, 3]);
 
-    const r1 = assign(emptyState, "s1", pool, ready, "round-robin", new Set<number>());
-    const r2 = assign(r1.nextState, "s2", pool, ready, "round-robin", new Set<number>());
-    const r3 = assign(r2.nextState, "s3", pool, ready, "round-robin", new Set<number>());
-    const r4 = assign(r3.nextState, "s4", pool, ready, "round-robin", new Set<number>());
+    const r1 = assign(emptyState, "s1", pool, ready, "round-robin", new Map());
+    const r2 = assign(r1.nextState, "s2", pool, ready, "round-robin", new Map());
+    const r3 = assign(r2.nextState, "s3", pool, ready, "round-robin", new Map());
+    const r4 = assign(r3.nextState, "s4", pool, ready, "round-robin", new Map());
 
     expect(r1.kind).toBe("assigned");
     expect(r2.kind).toBe("assigned");
@@ -226,14 +191,7 @@ describe("assign — new session — round-robin spread", () => {
     const ready = new Set([1, 2]);
     const stateWithLargeCursor: SelectionState = { cursor: 100, assignments: {} };
 
-    const result = assign(
-      stateWithLargeCursor,
-      "s1",
-      pool,
-      ready,
-      "round-robin",
-      new Set<number>(),
-    );
+    const result = assign(stateWithLargeCursor, "s1", pool, ready, "round-robin", new Map());
     expect(result.kind).toBe("assigned");
     if (result.kind === "assigned") {
       // cursor 100 % 2 = 0 → first eligible = acct1
@@ -252,9 +210,9 @@ describe("assign — new session — round-robin spread", () => {
     ];
     const ready = new Set([2, 3]);
 
-    const r1 = assign(emptyState, "s1", pool, ready, "round-robin", new Set<number>());
-    const r2 = assign(r1.nextState, "s2", pool, ready, "round-robin", new Set<number>());
-    const r3 = assign(r2.nextState, "s3", pool, ready, "round-robin", new Set<number>());
+    const r1 = assign(emptyState, "s1", pool, ready, "round-robin", new Map());
+    const r2 = assign(r1.nextState, "s2", pool, ready, "round-robin", new Map());
+    const r3 = assign(r2.nextState, "s3", pool, ready, "round-robin", new Map());
 
     expect(r1.kind).toBe("assigned");
     expect(r2.kind).toBe("assigned");
@@ -279,7 +237,7 @@ describe("assign — resume session", () => {
       assignments: { s1: 2 },
     };
     const pool = [makeAccount(1), makeAccount(2)];
-    const result = assign(state, "s1", pool, new Set([1, 2]), "round-robin", new Set<number>());
+    const result = assign(state, "s1", pool, new Set([1, 2]), "round-robin", new Map());
     expect(result.kind).toBe("assigned");
     if (result.kind === "assigned") {
       expect(result.accountNumber).toBe(2);
@@ -292,7 +250,7 @@ describe("assign — resume session", () => {
     const state: SelectionState = { cursor: 0, assignments: { s1: 1 } };
     const pool = [makeAccount(1)];
     // ready is empty → pin not ready
-    const result = assign(state, "s1", pool, new Set(), "round-robin", new Set<number>());
+    const result = assign(state, "s1", pool, new Set(), "round-robin", new Map());
     expect(result.kind).toBe("warm");
     if (result.kind === "warm") {
       expect(result.accountNumber).toBe(1);
@@ -303,7 +261,7 @@ describe("assign — resume session", () => {
   it("pinned account missing from pool → abort (state unchanged)", () => {
     const state: SelectionState = { cursor: 0, assignments: { s1: 99 } };
     const pool = [makeAccount(1), makeAccount(2)];
-    const result = assign(state, "s1", pool, new Set([1, 2]), "round-robin", new Set<number>());
+    const result = assign(state, "s1", pool, new Set([1, 2]), "round-robin", new Map());
     expect(result.kind).toBe("abort");
     if (result.kind === "abort") {
       expect(result.reason.length).toBeGreaterThan(0);
@@ -314,7 +272,7 @@ describe("assign — resume session", () => {
   it("pinned account not usable → abort with reason (state unchanged)", () => {
     const state: SelectionState = { cursor: 0, assignments: { s1: 1 } };
     const pool = [makeAccount(1, { usable: false, reason: "token_expired" })];
-    const result = assign(state, "s1", pool, new Set([1]), "round-robin", new Set<number>());
+    const result = assign(state, "s1", pool, new Set([1]), "round-robin", new Map());
     expect(result.kind).toBe("abort");
     if (result.kind === "abort") {
       expect(result.reason).toContain("token_expired");
@@ -325,7 +283,7 @@ describe("assign — resume session", () => {
   it("pinned account rate-limited → abort (state unchanged)", () => {
     const state: SelectionState = { cursor: 0, assignments: { s1: 1 } };
     const pool = [makeAccount(1, { rateLimited: true })];
-    const result = assign(state, "s1", pool, new Set([1]), "round-robin", new Set<number>());
+    const result = assign(state, "s1", pool, new Set([1]), "round-robin", new Map());
     expect(result.kind).toBe("abort");
     if (result.kind === "abort") {
       expect(result.reason.length).toBeGreaterThan(0);
@@ -337,7 +295,7 @@ describe("assign — resume session", () => {
     // pinned=1 but it's not usable; acct 2 is eligible — must NOT pick acct 2
     const state: SelectionState = { cursor: 0, assignments: { s1: 1 } };
     const pool = [makeAccount(1, { usable: false, reason: "api_key" }), makeAccount(2)];
-    const result = assign(state, "s1", pool, new Set([2]), "round-robin", new Set<number>());
+    const result = assign(state, "s1", pool, new Set([2]), "round-robin", new Map());
     expect(result.kind).toBe("abort");
     // Must NOT be "assigned" with account 2
     if (result.kind === "assigned") {
@@ -348,7 +306,7 @@ describe("assign — resume session", () => {
   it("resume preserves cursor from original state", () => {
     const state: SelectionState = { cursor: 42, assignments: { s1: 1 } };
     const pool = [makeAccount(1)];
-    const result = assign(state, "s1", pool, new Set([1]), "round-robin", new Set<number>());
+    const result = assign(state, "s1", pool, new Set([1]), "round-robin", new Map());
     expect(result.nextState.cursor).toBe(42);
   });
 });
@@ -361,8 +319,8 @@ describe("assign — determinism and no-mutation", () => {
   it("same inputs produce same result", () => {
     const pool = [makeAccount(1), makeAccount(2), makeAccount(3)];
     const ready = new Set([1, 2, 3]);
-    const r1 = assign(emptyState, "s1", pool, ready, "round-robin", new Set<number>());
-    const r2 = assign(emptyState, "s1", pool, ready, "round-robin", new Set<number>());
+    const r1 = assign(emptyState, "s1", pool, ready, "round-robin", new Map());
+    const r2 = assign(emptyState, "s1", pool, ready, "round-robin", new Map());
     expect(r1.kind).toBe(r2.kind);
     if (r1.kind === "assigned" && r2.kind === "assigned") {
       expect(r1.accountNumber).toBe(r2.accountNumber);
@@ -376,7 +334,7 @@ describe("assign — determinism and no-mutation", () => {
     const originalAssignments = { ...state.assignments };
 
     const pool = [makeAccount(1)];
-    assign(state, "s1", pool, new Set([1]), "round-robin", new Set<number>());
+    assign(state, "s1", pool, new Set([1]), "round-robin", new Map());
 
     expect(state.cursor).toBe(originalCursor);
     expect(state.assignments).toEqual(originalAssignments);
@@ -388,14 +346,14 @@ describe("assign — determinism and no-mutation", () => {
     const originalAssignments = { ...state.assignments };
 
     const pool = [makeAccount(1)];
-    assign(state, "s1", pool, new Set([1]), "round-robin", new Set<number>());
+    assign(state, "s1", pool, new Set([1]), "round-robin", new Map());
 
     expect(state.cursor).toBe(originalCursor);
     expect(state.assignments).toEqual(originalAssignments);
   });
 
   it("abort: nextState is the same object as input state (no new allocation needed)", () => {
-    const result = assign(emptyState, "s1", [], new Set(), "round-robin", new Set<number>());
+    const result = assign(emptyState, "s1", [], new Set(), "round-robin", new Map());
     expect(result.nextState).toBe(emptyState);
   });
 });
@@ -414,8 +372,8 @@ describe("assign — least-used", () => {
     ];
     const ready = new Set([1, 2, 3]);
 
-    const rrResult = assign(emptyState, "s1", pool, ready, "round-robin", new Set<number>());
-    const luResult = assign(emptyState, "s1", pool, ready, "least-used", new Set<number>());
+    const rrResult = assign(emptyState, "s1", pool, ready, "round-robin", new Map());
+    const luResult = assign(emptyState, "s1", pool, ready, "least-used", new Map());
 
     expect(rrResult.kind).toBe("assigned");
     expect(luResult.kind).toBe("assigned");
@@ -431,8 +389,8 @@ describe("assign — least-used", () => {
     ];
     const ready = new Set([1, 2]);
 
-    const r1 = assign(emptyState, "s1", pool, ready, "least-used", new Set<number>());
-    const r2 = assign(emptyState, "s1", pool, ready, "least-used", new Set<number>());
+    const r1 = assign(emptyState, "s1", pool, ready, "least-used", new Map());
+    const r2 = assign(emptyState, "s1", pool, ready, "least-used", new Map());
 
     expect(r1.kind).toBe("assigned");
     expect(r2.kind).toBe("assigned");
@@ -451,7 +409,7 @@ describe("assign — least-used", () => {
     ];
     const ready = new Set([1, 2]);
 
-    const result = assign(emptyState, "s1", pool, ready, "least-used", new Set<number>());
+    const result = assign(emptyState, "s1", pool, ready, "least-used", new Map());
     expect(result.kind).toBe("assigned");
     if (result.kind === "assigned") expect(result.accountNumber).toBe(2);
   });
@@ -460,7 +418,7 @@ describe("assign — least-used", () => {
     const pool = [makeAccount(1, { usageUnavailable: true })];
     const ready = new Set([1]);
 
-    const result = assign(emptyState, "s1", pool, ready, "least-used", new Set<number>());
+    const result = assign(emptyState, "s1", pool, ready, "least-used", new Map());
     expect(result.kind).toBe("assigned");
     if (result.kind === "assigned") expect(result.accountNumber).toBe(1);
   });
@@ -472,7 +430,7 @@ describe("assign — least-used", () => {
     ];
     const ready = new Set([1, 2]);
 
-    const result = assign(emptyState, "s1", pool, ready, "least-used", new Set<number>());
+    const result = assign(emptyState, "s1", pool, ready, "least-used", new Map());
     expect(result.kind).toBe("assigned");
     if (result.kind === "assigned") expect(result.accountNumber).toBe(2);
   });
@@ -484,7 +442,7 @@ describe("assign — least-used", () => {
     ];
     const ready = new Set([1, 2]);
 
-    const result = assign(emptyState, "s1", pool, ready, "least-used", new Set<number>());
+    const result = assign(emptyState, "s1", pool, ready, "least-used", new Map());
     expect(result.kind).toBe("assigned");
     if (result.kind === "assigned") {
       expect(result.accountNumber).toBe(2);
@@ -501,7 +459,7 @@ describe("assign — least-used", () => {
     ];
     const ready = new Set([1, 2, 3]);
 
-    const result = assign(emptyState, "s1", pool, ready, "least-used", new Set<number>());
+    const result = assign(emptyState, "s1", pool, ready, "least-used", new Map());
     expect(result.kind).toBe("assigned");
     if (result.kind === "assigned") expect(result.accountNumber).toBe(3);
   });
@@ -509,72 +467,108 @@ describe("assign — least-used", () => {
 
 // ---------------------------------------------------------------------------
 // assign — reset-soon
-// (imminence is computed by the caller and passed in; assign only consumes the set)
+// (the ranking key is computed by the caller and passed in; assign only consumes
+//  the map — see computeResetOrder in index.ts for how entries are earned)
 // ---------------------------------------------------------------------------
 
 describe("assign — reset-soon", () => {
-  it("favors an imminent eligible account over a fresher non-imminent one", () => {
+  it("prefers the soonest-resetting account over a fresher one that resets later", () => {
     const pool = [
-      makeAccount(1, { fiveHourPct: 5, sevenDayPct: 5 }), // freshest, but NOT imminent
-      makeAccount(2, { fiveHourPct: 14, sevenDayPct: 68 }), // imminent
+      makeAccount(1, { fiveHourPct: 5, sevenDayPct: 5 }), // freshest, but resets later
+      makeAccount(2, { fiveHourPct: 14, sevenDayPct: 68 }), // resets sooner → drain it first
     ];
     const ready = new Set([1, 2]);
-    const result = assign(emptyState, "s1", pool, ready, "reset-soon", new Set([2]));
+    const order = new Map([
+      [1, 6 * 24 * 3_600_000],
+      [2, 2 * 3_600_000],
+    ]);
+    const result = assign(emptyState, "s1", pool, ready, "reset-soon", order);
     expect(result.kind).toBe("assigned");
     if (result.kind === "assigned") expect(result.accountNumber).toBe(2);
   });
 
-  it("imminent acct wins every new session (whole funnel lands on it)", () => {
+  it("orders continuously — 25h beats 6d, which the old 24h cliff got backwards", () => {
+    // Under the removed cliff NEITHER account was "imminent", so selection fell through to
+    // least-used and picked #1 — the account whose quota was LEAST perishable.
+    const pool = [
+      makeAccount(1, { fiveHourPct: 5, sevenDayPct: 5 }), // least-used, resets in 6d
+      makeAccount(2, { fiveHourPct: 20, sevenDayPct: 40 }), // resets in 25h
+    ];
+    const ready = new Set([1, 2]);
+    const order = new Map([
+      [1, 6 * 24 * 3_600_000],
+      [2, 25 * 3_600_000],
+    ]);
+    const result = assign(emptyState, "s1", pool, ready, "reset-soon", order);
+    expect(result.kind).toBe("assigned");
+    if (result.kind === "assigned") expect(result.accountNumber).toBe(2);
+  });
+
+  it("the soonest-resetting account wins every new session (whole funnel lands on it)", () => {
     const pool = [
       makeAccount(1, { fiveHourPct: 5, sevenDayPct: 5 }),
       makeAccount(2, { fiveHourPct: 14, sevenDayPct: 68 }),
     ];
     const ready = new Set([1, 2]);
-    const imminent = new Set([2]);
-    const r1 = assign(emptyState, "s1", pool, ready, "reset-soon", imminent);
+    const order = new Map([
+      [1, 6 * 24 * 3_600_000],
+      [2, 2 * 3_600_000],
+    ]);
+    const r1 = assign(emptyState, "s1", pool, ready, "reset-soon", order);
     const r2 = assign(
       r1.kind === "assigned" ? r1.nextState : emptyState,
       "s2",
       pool,
       ready,
       "reset-soon",
-      imminent,
+      order,
     );
     if (r1.kind === "assigned") expect(r1.accountNumber).toBe(2);
     if (r2.kind === "assigned") expect(r2.accountNumber).toBe(2);
   });
 
-  it("multiple imminent → lowest max(5h,7d), tie-break lowest number", () => {
+  it("equal reset instants → lowest max(5h,7d), tie-break lowest number", () => {
     const pool = [
       makeAccount(1, { fiveHourPct: 70, sevenDayPct: 30 }), // metric=70
       makeAccount(2, { fiveHourPct: 20, sevenDayPct: 40 }), // metric=40 (picked)
       makeAccount(3, { fiveHourPct: 10, sevenDayPct: 80 }), // metric=80
     ];
     const ready = new Set([1, 2, 3]);
-    const result = assign(emptyState, "s1", pool, ready, "reset-soon", new Set([1, 2, 3]));
+    const order = new Map([
+      [1, 3_600_000],
+      [2, 3_600_000],
+      [3, 3_600_000],
+    ]);
+    const result = assign(emptyState, "s1", pool, ready, "reset-soon", order);
     expect(result.kind).toBe("assigned");
     if (result.kind === "assigned") expect(result.accountNumber).toBe(2);
   });
 
-  it("multiple imminent with equal metric → lowest account number", () => {
+  it("equal reset AND equal metric → lowest account number", () => {
     const pool = [
       makeAccount(2, { fiveHourPct: 50, sevenDayPct: 50 }),
       makeAccount(1, { fiveHourPct: 50, sevenDayPct: 50 }),
     ];
     const ready = new Set([1, 2]);
-    const result = assign(emptyState, "s1", pool, ready, "reset-soon", new Set([1, 2]));
+    const order = new Map([
+      [1, 3_600_000],
+      [2, 3_600_000],
+    ]);
+    const result = assign(emptyState, "s1", pool, ready, "reset-soon", order);
     expect(result.kind).toBe("assigned");
     if (result.kind === "assigned") expect(result.accountNumber).toBe(1);
   });
 
-  it("no imminent (empty set) → behaves exactly like least-used over eligible", () => {
+  it("nothing ranked (empty map) → degenerates exactly to least-used", () => {
+    // The documented fallback, now emergent rather than branched: every key is Infinity, so the
+    // ordering collapses to the metric. Kept under test because it is now the rare path.
     const pool = [
       makeAccount(1, { fiveHourPct: 80, sevenDayPct: 70 }), // metric=80
       makeAccount(2, { fiveHourPct: 10, sevenDayPct: 20 }), // metric=20 (least-used)
     ];
     const ready = new Set([1, 2]);
-    const rs = assign(emptyState, "s1", pool, ready, "reset-soon", new Set<number>());
-    const lu = assign(emptyState, "s1", pool, ready, "least-used", new Set<number>());
+    const rs = assign(emptyState, "s1", pool, ready, "reset-soon", new Map());
+    const lu = assign(emptyState, "s1", pool, ready, "least-used", new Map());
     expect(rs.kind).toBe("assigned");
     if (rs.kind === "assigned" && lu.kind === "assigned") {
       expect(rs.accountNumber).toBe(2);
@@ -582,20 +576,60 @@ describe("assign — reset-soon", () => {
     }
   });
 
-  it("imminent member that is not eligible (rate-limited) is excluded → falls back to least-used", () => {
+  it("an unranked account is a last resort — reached only when nothing ranked is eligible", () => {
+    // This is how the headroom bands take effect: a band-failing account simply has no map
+    // entry, so it sorts behind every ranked account without selection.ts knowing about bands.
+    const ranked = [
+      makeAccount(1, { fiveHourPct: 60, sevenDayPct: 60 }), // ranked, but heavily used
+      makeAccount(2, { fiveHourPct: 1, sevenDayPct: 1 }), // unranked (failed a band), pristine
+    ];
+    const ready = new Set([1, 2]);
+    const withRanked = assign(
+      emptyState,
+      "s1",
+      ranked,
+      ready,
+      "reset-soon",
+      new Map([[1, 3_600_000]]),
+    );
+    expect(withRanked.kind).toBe("assigned");
+    if (withRanked.kind === "assigned") expect(withRanked.accountNumber).toBe(1);
+
+    // Same pool, but the ranked account is no longer eligible → the unranked one is used.
+    const onlyUnranked = [makeAccount(1, { rateLimited: true }), makeAccount(2)];
+    const result = assign(
+      emptyState,
+      "s1",
+      onlyUnranked,
+      ready,
+      "reset-soon",
+      new Map([[1, 3_600_000]]),
+    );
+    expect(result.kind).toBe("assigned");
+    if (result.kind === "assigned") expect(result.accountNumber).toBe(2);
+  });
+
+  it("a ranked account that is not eligible (rate-limited) is excluded", () => {
     const pool = [
-      makeAccount(1, { rateLimited: true, fiveHourPct: 14, sevenDayPct: 68 }), // imminent but rate-limited
+      makeAccount(1, { rateLimited: true, fiveHourPct: 14, sevenDayPct: 68 }),
       makeAccount(2, { fiveHourPct: 30, sevenDayPct: 30 }), // only eligible
     ];
     const ready = new Set([1, 2]);
-    const result = assign(emptyState, "s1", pool, ready, "reset-soon", new Set([1]));
+    const result = assign(emptyState, "s1", pool, ready, "reset-soon", new Map([[1, 3_600_000]]));
     expect(result.kind).toBe("assigned");
     if (result.kind === "assigned") expect(result.accountNumber).toBe(2);
   });
 
   it("advances cursor by 1 and pins the session", () => {
     const pool = [makeAccount(1, { fiveHourPct: 14, sevenDayPct: 68 })];
-    const result = assign(emptyState, "s1", pool, new Set([1]), "reset-soon", new Set([1]));
+    const result = assign(
+      emptyState,
+      "s1",
+      pool,
+      new Set([1]),
+      "reset-soon",
+      new Map([[1, 3_600_000]]),
+    );
     expect(result.kind).toBe("assigned");
     if (result.kind === "assigned") {
       expect(result.nextState.cursor).toBe(1);
@@ -612,7 +646,7 @@ describe("assign — two-tier selection", () => {
   it("known and unavailable both ready → known picked (round-robin)", () => {
     const pool = [makeAccount(1, { usageUnavailable: true }), makeAccount(2)];
     const ready = new Set([1, 2]);
-    const result = assign(emptyState, "s1", pool, ready, "round-robin", new Set<number>());
+    const result = assign(emptyState, "s1", pool, ready, "round-robin", new Map());
     expect(result.kind).toBe("assigned");
     if (result.kind === "assigned") expect(result.accountNumber).toBe(2);
   });
@@ -620,7 +654,7 @@ describe("assign — two-tier selection", () => {
   it("known and unavailable both ready → known picked (least-used)", () => {
     const pool = [makeAccount(1, { usageUnavailable: true }), makeAccount(2)];
     const ready = new Set([1, 2]);
-    const result = assign(emptyState, "s1", pool, ready, "least-used", new Set<number>());
+    const result = assign(emptyState, "s1", pool, ready, "least-used", new Map());
     expect(result.kind).toBe("assigned");
     if (result.kind === "assigned") expect(result.accountNumber).toBe(2);
   });
@@ -631,14 +665,14 @@ describe("assign — two-tier selection", () => {
       makeAccount(2, { usageUnavailable: true }),
     ];
     const ready = new Set([1, 2]);
-    const result = assign(emptyState, "s1", pool, ready, "round-robin", new Set<number>());
+    const result = assign(emptyState, "s1", pool, ready, "round-robin", new Map());
     expect(result.kind).toBe("assigned");
   });
 
   it("pinned usageUnavailable account that is ready → assigned (not abort)", () => {
     const state: SelectionState = { cursor: 0, assignments: { s1: 1 } };
     const pool = [makeAccount(1, { usageUnavailable: true })];
-    const result = assign(state, "s1", pool, new Set([1]), "round-robin", new Set<number>());
+    const result = assign(state, "s1", pool, new Set([1]), "round-robin", new Map());
     expect(result.kind).toBe("assigned");
     if (result.kind === "assigned") {
       expect(result.accountNumber).toBe(1);
@@ -649,7 +683,7 @@ describe("assign — two-tier selection", () => {
   it("pinned usageUnavailable account not ready → warm (not abort)", () => {
     const state: SelectionState = { cursor: 0, assignments: { s1: 1 } };
     const pool = [makeAccount(1, { usageUnavailable: true })];
-    const result = assign(state, "s1", pool, new Set<number>(), "round-robin", new Set<number>());
+    const result = assign(state, "s1", pool, new Set<number>(), "round-robin", new Map());
     expect(result.kind).toBe("warm");
     if (result.kind === "warm") {
       expect(result.accountNumber).toBe(1);
@@ -682,7 +716,7 @@ describe("assign — resume onto a cswap-disabled account", () => {
       }),
       makeAccount(2, { active: false }),
     ];
-    const result = assign(pinned, "sess-a", pool, new Set([1, 2]), "round-robin", new Set());
+    const result = assign(pinned, "sess-a", pool, new Set([1, 2]), "round-robin", new Map());
 
     expect(result.kind).toBe("abort");
     if (result.kind !== "abort") throw new Error("unreachable");
@@ -703,7 +737,7 @@ describe("assign — resume onto a cswap-disabled account", () => {
       }),
       makeAccount(2, { active: false }),
     ];
-    const result = assign(emptyState, "sess-new", pool, new Set([1, 2]), "round-robin", new Set());
+    const result = assign(emptyState, "sess-new", pool, new Set([1, 2]), "round-robin", new Map());
 
     expect(result.kind).toBe("assigned");
     if (result.kind !== "assigned") throw new Error("unreachable");
@@ -712,7 +746,7 @@ describe("assign — resume onto a cswap-disabled account", () => {
 
   it("resumes normally once cswap enable clears the flag", () => {
     const pool = [makeAccount(1, { active: false }), makeAccount(2, { active: false })];
-    const result = assign(pinned, "sess-a", pool, new Set([1, 2]), "round-robin", new Set());
+    const result = assign(pinned, "sess-a", pool, new Set([1, 2]), "round-robin", new Map());
 
     expect(result.kind).toBe("assigned");
     if (result.kind !== "assigned") throw new Error("unreachable");

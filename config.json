@@ -3,7 +3,7 @@
   "includeSlots": null,
   "excludeSlots": [],
   "rateLimitPct": 90,
-  "//strategy": "round-robin | least-used | reset-soon. reset-soon favors an account whose 7-day window resets within 24h and still has capacity (drain-before-refill), falling back to least-used when none qualify. Also governs session-less aux routing. JSON has no comments; this // key is ignored by the plugin.",
+  "//strategy": "round-robin | least-used | reset-soon. reset-soon ranks eligible accounts by soonest 7-day reset (drain-before-refill), tie-broken by least-used then slot number; an account within 10 percentage points of rateLimitPct on EITHER window is unranked and used only as a last resort, so the funnel cannot push it over the limit (which would abort every resume pinned to it). With nothing ranked it degenerates to least-used. Also governs session-less aux routing. JSON has no comments; this // key is ignored by the plugin.",
   "strategy": "reset-soon",
   "prewarmArgs": ["--version"],
   "refreshIntervalMs": 600000,

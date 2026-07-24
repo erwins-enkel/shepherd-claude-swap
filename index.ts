@@ -130,42 +130,48 @@ function executeSwitch(
   return cswap.switch(); // "next" → plain rotation
 }
 
-/** 24h window (ms): a 7-day reset landing inside it is "soon" for the `reset-soon` strategy. */
-const RESET_SOON_WINDOW_MS = 24 * 60 * 60 * 1000;
-
 /**
- * Headroom (percentage points below `rateLimitPct`) the SHORT 5-hour window must keep for an
- * account to count as imminent. `reset-soon` funnels every new session onto the imminent account;
- * the 5h window does NOT reset soon, so a near-limit funnel target would be driven straight into a
- * 5h rate-limit (then unusable for up to 5h). The 7-day (resetting) window gets NO such margin —
- * plain eligibility (`sevenDayPct < rateLimitPct`) — so an account with real 7d capacity still
- * wins, and an over-limit one self-corrects via `classifyPool`'s `rateLimited` flag next refresh.
+ * Headroom (percentage points below `rateLimitPct`) a window must keep for an account to be RANKED
+ * by `reset-soon`. Both windows carry one, for the same reason from two directions:
+ *
+ *  - 5-hour: the funnel target's 5h window does NOT reset soon, so driving it into a 5h limit
+ *    strands the account — and every session pinned to it — for up to five hours.
+ *  - 7-day: crossing `rateLimitPct` makes `assign()` abort every pinned resume on that account
+ *    (`usable && !rateLimited`), with no reassignment, until the window resets. Continuous ranking
+ *    funnels ALL new pins onto one account, so without a band the strategy maximizes exactly the
+ *    population it can strand. The band gates only NEW pins — sessions already pinned keep resuming
+ *    and keep draining the window — so it costs far less perishable quota than it first appears.
+ *
+ * An account failing either band is simply absent from the ranking map, so it sorts last and is
+ * reached only when nothing else is eligible (then by the least-used metric).
  */
 const FIVE_HOUR_HEADROOM_PP = 10;
+const SEVEN_DAY_HEADROOM_PP = 10;
 
 /**
- * Account numbers the `reset-soon` strategy should FAVOR: the 7-day window resets within 24h
- * (future) AND still has capacity (`sevenDayPct < rateLimitPct`) AND the 5-hour window keeps
- * `FIVE_HOUR_HEADROOM_PP` headroom below the limit. Pure — the clock is supplied as `nowMs` (epoch
- * ms) and `Date.parse` of the stored ISO `resetsAt` is deterministic, so `selection.ts` stays
- * Date-free. `null` pct, or an unparseable / past / `null` `resetsAt`, → not imminent.
+ * Ranking key for `reset-soon`: account number → ms until its 7-day window resets. An account earns
+ * an entry only when its 7-day reset is a parseable FUTURE instant AND both windows keep their
+ * headroom band. Absent ⇒ `Infinity` at the call site, i.e. sorted behind every ranked account.
+ *
+ * Ordering on exact milliseconds mirrors upstream `consume-first`, which sorts on the exact reset
+ * epoch with no bucketing. Pure — the clock arrives as `nowMs` and `Date.parse` of the stored ISO
+ * string is deterministic, so `selection.ts` stays Date-free.
  */
-export function computeImminent(
+export function computeResetOrder(
   pool: PoolAccount[],
   nowMs: number,
   rateLimitPct: number,
-): Set<number> {
-  const imminent = new Set<number>();
+): Map<number, number> {
+  const order = new Map<number, number>();
   for (const a of pool) {
     if (a.sevenDayResetsAt === null) continue;
     const resetMs = Date.parse(a.sevenDayResetsAt);
-    if (!Number.isFinite(resetMs)) continue;
-    if (!(resetMs > nowMs && resetMs - nowMs < RESET_SOON_WINDOW_MS)) continue;
-    if (a.sevenDayPct === null || a.sevenDayPct >= rateLimitPct) continue;
+    if (!Number.isFinite(resetMs) || resetMs <= nowMs) continue;
     if (a.fiveHourPct === null || a.fiveHourPct > rateLimitPct - FIVE_HOUR_HEADROOM_PP) continue;
-    imminent.add(a.number);
+    if (a.sevenDayPct === null || a.sevenDayPct > rateLimitPct - SEVEN_DAY_HEADROOM_PP) continue;
+    order.set(a.number, resetMs - nowMs);
   }
-  return imminent;
+  return order;
 }
 
 /**
@@ -187,7 +193,7 @@ function auxSpawnPatch(
   ready: Set<number>,
   backupRoot: string,
   strategy: Strategy,
-  imminent: Set<number>,
+  resetOrder: Map<number, number>,
 ): SpawnPatch | void {
   // review / plan-gate: keep the aux spawn on the parent session's account.
   if (d.parentSessionId !== undefined) {
@@ -202,7 +208,7 @@ function auxSpawnPatch(
   }
   // session-less aux (doc-agent / standalone critic): route to a pool account
   // EPHEMERALLY (no durable pin, no cursor persist); fall open if none eligible.
-  const result = assign(state, d.sessionId, pool, ready, strategy, imminent);
+  const result = assign(state, d.sessionId, pool, ready, strategy, resetOrder);
   if (result.kind === "assigned") {
     const acct = pool.find((a) => a.number === result.accountNumber);
     const email = acct?.email ?? "";
@@ -343,8 +349,8 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
     // behavior). Either way an aux spawn is NEVER aborted — a refused review is terminal (no
     // held-retry). See README (aux-spawn section) for the default-true override + version caveat.
     // `reset-soon` reads the clock once here (keeping `assign` Date-free) and uses the same
-    // imminent set for the main spawn and any session-less aux route below.
-    const imminent = computeImminent(prewarmer.pool, Date.parse(now()), cfg.rateLimitPct);
+    // ranking for the main spawn and any session-less aux route below.
+    const resetOrder = computeResetOrder(prewarmer.pool, Date.parse(now()), cfg.rateLimitPct);
 
     const kind = d.kind ?? "session";
     if (kind !== "session") {
@@ -356,7 +362,7 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
         prewarmer.ready,
         backupRoot,
         cfg.strategy,
-        imminent,
+        resetOrder,
       );
     }
 
@@ -366,7 +372,7 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
       prewarmer.pool,
       prewarmer.ready,
       cfg.strategy,
-      imminent,
+      resetOrder,
     );
 
     if (result.kind === "assigned") {

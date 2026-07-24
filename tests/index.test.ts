@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { register, computeImminent, type PluginDeps } from "../index";
+import { register, computeResetOrder, type PluginDeps } from "../index";
 import { PluginSpawnAborted } from "../types";
 import type { PoolAccount } from "../src/accounts";
 import type {
@@ -1902,10 +1902,10 @@ describe("register — auto-heal integration", () => {
 });
 
 // ───────────────────────────────────────────────────────────────────────────
-// computeImminent — pure 7-day-reset-soon classifier (reset-soon strategy)
+// computeResetOrder — pure ranking key for the reset-soon strategy
 // ───────────────────────────────────────────────────────────────────────────
 
-describe("computeImminent", () => {
+describe("computeResetOrder", () => {
   const NOW_MS = Date.parse("2026-06-30T10:00:00.000Z");
   const H = 60 * 60 * 1000;
   const RATE_LIMIT = 90;
@@ -1935,61 +1935,79 @@ describe("computeImminent", () => {
     };
   }
 
-  const imminent = (o: Partial<PoolAccount>): boolean =>
-    computeImminent([poolAcct(1, o)], NOW_MS, RATE_LIMIT).has(1);
+  /** Is account 1 ranked at all? (absent ⇒ sorts last in `pickResetSoon`) */
+  const ranked = (o: Partial<PoolAccount>): boolean =>
+    computeResetOrder([poolAcct(1, o)], NOW_MS, RATE_LIMIT).has(1);
 
-  it("7-day reset within 24h with capacity → imminent", () => {
-    expect(imminent({ sevenDayResetsAt: at(23 * H) })).toBe(true);
+  it("ranks by ms until the 7-day reset", () => {
+    const order = computeResetOrder(
+      [poolAcct(1, { sevenDayResetsAt: at(5 * H) })],
+      NOW_MS,
+      RATE_LIMIT,
+    );
+    expect(order.get(1)).toBe(5 * H);
   });
 
-  it("7-day reset exactly at now+24h → NOT imminent (strict <)", () => {
-    expect(imminent({ sevenDayResetsAt: at(24 * H) })).toBe(false);
+  it("has no 24h cliff — a reset days out is still ranked", () => {
+    // The old computeImminent excluded anything beyond 24h, which made selection fall through to
+    // least-used and pick the LEAST perishable account. Ranking is now continuous.
+    expect(ranked({ sevenDayResetsAt: at(6 * 24 * H) })).toBe(true);
+    expect(ranked({ sevenDayResetsAt: at(25 * H) })).toBe(true);
   });
 
-  it("just under now+24h → imminent", () => {
-    expect(imminent({ sevenDayResetsAt: at(24 * H - 1) })).toBe(true);
-  });
-
-  it("reset just in the past → NOT imminent", () => {
-    expect(imminent({ sevenDayResetsAt: at(-1) })).toBe(false);
-  });
-
-  it("null sevenDayResetsAt → NOT imminent", () => {
-    expect(imminent({ sevenDayResetsAt: null })).toBe(false);
-  });
-
-  it("unparseable sevenDayResetsAt → NOT imminent", () => {
-    expect(imminent({ sevenDayResetsAt: "not-a-date" })).toBe(false);
-  });
-
-  it("5h headroom boundary: fiveHourPct == rateLimitPct - 10 (80) → imminent (<=)", () => {
-    expect(imminent({ fiveHourPct: 80 })).toBe(true);
-  });
-
-  it("5h just over the headroom (81) → NOT imminent (funnel guard)", () => {
-    expect(imminent({ fiveHourPct: 81 })).toBe(false);
-  });
-
-  it("7d eligibility boundary: sevenDayPct == rateLimitPct (90) → NOT imminent (strict <)", () => {
-    expect(imminent({ sevenDayPct: 90 })).toBe(false);
-  });
-
-  it("7d just under the limit (89) with sound 5h → imminent (no 7d margin)", () => {
-    expect(imminent({ sevenDayPct: 89 })).toBe(true);
-  });
-
-  it("null fiveHourPct or sevenDayPct → NOT imminent", () => {
-    expect(imminent({ fiveHourPct: null })).toBe(false);
-    expect(imminent({ sevenDayPct: null })).toBe(false);
-  });
-
-  it("returns only the imminent subset across a mixed pool", () => {
+  it("orders a mixed pool by soonest reset first", () => {
     const pool = [
-      poolAcct(1, { sevenDayResetsAt: at(23 * H) }), // imminent
-      poolAcct(2, { sevenDayResetsAt: at(48 * H) }), // resets too far out
-      poolAcct(3, { sevenDayResetsAt: at(1 * H), fiveHourPct: 95 }), // 5h over headroom
-      poolAcct(4, { sevenDayResetsAt: at(2 * H), sevenDayPct: 95 }), // 7d over limit
+      poolAcct(1, { sevenDayResetsAt: at(6 * 24 * H) }),
+      poolAcct(2, { sevenDayResetsAt: at(25 * H) }),
+      poolAcct(3, { sevenDayResetsAt: at(2 * H) }),
     ];
-    expect([...computeImminent(pool, NOW_MS, RATE_LIMIT)].sort()).toEqual([1]);
+    const order = computeResetOrder(pool, NOW_MS, RATE_LIMIT);
+    const bySoonest = [...order.entries()].sort((a, b) => a[1] - b[1]).map(([n]) => n);
+    expect(bySoonest).toEqual([3, 2, 1]);
+  });
+
+  it("a reset at or before now is unknown, not imminent → unranked", () => {
+    // A stale snapshot can carry an elapsed resetsAt; treating it as real would sort the
+    // just-rolled-over account (the LEAST perishable of all) as soonest.
+    expect(ranked({ sevenDayResetsAt: at(-1) })).toBe(false);
+    expect(ranked({ sevenDayResetsAt: at(0) })).toBe(false);
+  });
+
+  it("null or unparseable sevenDayResetsAt → unranked", () => {
+    expect(ranked({ sevenDayResetsAt: null })).toBe(false);
+    expect(ranked({ sevenDayResetsAt: "not-a-date" })).toBe(false);
+  });
+
+  it("5h headroom boundary: fiveHourPct == rateLimitPct - 10 (80) → ranked (<=)", () => {
+    expect(ranked({ fiveHourPct: 80 })).toBe(true);
+  });
+
+  it("5h just over the headroom (81) → unranked (funnel guard)", () => {
+    expect(ranked({ fiveHourPct: 81 })).toBe(false);
+  });
+
+  it("7d headroom boundary: sevenDayPct == rateLimitPct - 10 (80) → ranked (<=)", () => {
+    expect(ranked({ sevenDayPct: 80 })).toBe(true);
+  });
+
+  it("7d just over the headroom (81) → unranked (resume-abort guard)", () => {
+    // New in this change: without the band, continuous ranking funnels every new pin onto the
+    // account nearest its 7-day limit — and crossing it aborts every pinned resume there.
+    expect(ranked({ sevenDayPct: 81 })).toBe(false);
+  });
+
+  it("null fiveHourPct or sevenDayPct → unranked", () => {
+    expect(ranked({ fiveHourPct: null })).toBe(false);
+    expect(ranked({ sevenDayPct: null })).toBe(false);
+  });
+
+  it("returns only the ranked subset across a mixed pool", () => {
+    const pool = [
+      poolAcct(1, { sevenDayResetsAt: at(23 * H) }), // ranked
+      poolAcct(2, { sevenDayResetsAt: at(48 * H) }), // ranked — no cliff any more
+      poolAcct(3, { sevenDayResetsAt: at(1 * H), fiveHourPct: 95 }), // 5h band
+      poolAcct(4, { sevenDayResetsAt: at(2 * H), sevenDayPct: 95 }), // 7d band
+    ];
+    expect([...computeResetOrder(pool, NOW_MS, RATE_LIMIT).keys()].sort()).toEqual([1, 2]);
   });
 });
