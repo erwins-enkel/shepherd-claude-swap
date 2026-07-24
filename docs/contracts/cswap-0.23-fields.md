@@ -187,7 +187,7 @@ render, which is indistinguishable from a plugin bug without a documented floor.
 
 Node cost is a closed form in **accounts × scoped windows**; see
 [`plugin-ui-widgets.md`](plugin-ui-widgets.md) for the formula, the grid test and the pre-existing
-≥2-window overflow. The rich/compact spend switch is derived from that form
+≥2-window overflow (issue #56). The rich/compact spend switch is derived from that form
 (`min(N,16) × (15 + 2S) ≤ 220`) rather than a fixed account threshold, because `S` is externally
 driven — cswap emits one weekly window per model with a per-model limit — so a constant sized at one
 `S` overclaims at another.

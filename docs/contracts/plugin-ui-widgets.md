@@ -67,7 +67,7 @@ Beyond those ceilings the host drops the whole view.
 This predates the 0.23 field work and is caused by the per-scoped-window meter and gauge, not by
 spend rendering; the grid test pins the exact set so a newly introduced overflow cannot blend in.
 Fixing it means changing how scoped windows render or lowering `MAX_DETAILED_ACCOUNTS` — tracked
-separately.
+in issue #56.
 
 ## Chart time-span semantics
 
