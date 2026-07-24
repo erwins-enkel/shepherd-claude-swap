@@ -3,6 +3,7 @@ import { classifyPool } from "../src/accounts";
 import { parseConfig } from "../src/config";
 import type { CswapListResult } from "../src/cswap";
 import fixtureRaw from "../docs/contracts/cswap-list.sample.json";
+import sample023Raw from "../docs/contracts/cswap-list-0.23.sample.json";
 
 // Cast fixture to our interface (extra fields are ignored at runtime).
 const fixture = fixtureRaw as unknown as CswapListResult;
@@ -442,5 +443,92 @@ describe("classifyPool — scopedWindows", () => {
     expect(pool[0]!.scopedWindows).toEqual([
       { name: "Fable", pct: 100, resetsAt: null, resetClock: null, resetCountdown: null },
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cswap's own `disabled` flag — honored read-only as a second rotation gate.
+// ---------------------------------------------------------------------------
+
+/** The 0.23 sample, captured from the real CLI with slot 3 aliased and disabled. */
+const sample023 = sample023Raw as unknown as CswapListResult;
+
+/** Clone the base fixture and set `disabled` on one raw row. */
+function withDisabled(number: number, disabled: boolean): CswapListResult {
+  const clone = structuredClone(fixture);
+  const row = clone.accounts.find((a) => a.number === number);
+  if (row === undefined) throw new Error(`fixture has no account ${number}`);
+  if (disabled) row.disabled = true;
+  else delete row.disabled;
+  return clone;
+}
+
+describe("classifyPool — cswap-disabled gate", () => {
+  it("marks a cswap-disabled account unusable with reason cswap-disabled", () => {
+    const pool = classifyPool(withDisabled(2, true), parseConfig({}));
+    const acct = pool.find((a) => a.number === 2)!;
+    expect(acct.cswapDisabled).toBe(true);
+    expect(acct.usable).toBe(false);
+    expect(acct.reason).toBe("cswap-disabled");
+  });
+
+  it("leaves other accounts untouched", () => {
+    const pool = classifyPool(withDisabled(2, true), parseConfig({}));
+    const other = pool.find((a) => a.number === 1)!;
+    expect(other.cswapDisabled).toBe(false);
+    expect(other.usable).toBe(true);
+  });
+
+  it("an absent `disabled` key normalizes to false, never undefined", () => {
+    const pool = classifyPool(withDisabled(2, false), parseConfig({}));
+    for (const acct of pool) expect(acct.cswapDisabled).toBe(false);
+  });
+
+  it("populates cswapDisabled on the non-ok usageStatus path, which short-circuits first", () => {
+    const list = withDisabled(2, true);
+    list.accounts.find((a) => a.number === 2)!.usageStatus = "unavailable";
+    const acct = classifyPool(list, parseConfig({})).find((a) => a.number === 2)!;
+    // The status wins the `reason`, but the flag must still be readable — Prewarmer.inScope()
+    // and the panel marker both depend on it being set on every path.
+    expect(acct.reason).toBe("unavailable");
+    expect(acct.cswapDisabled).toBe(true);
+  });
+
+  it("cswap-disabled outranks the plugin's own out-of-rotation set", () => {
+    const acct = classifyPool(withDisabled(2, true), parseConfig({}), new Set([2])).find(
+      (a) => a.number === 2,
+    )!;
+    expect(acct.reason).toBe("cswap-disabled");
+  });
+
+  it("falls back to out-of-rotation once cswap's flag clears", () => {
+    const acct = classifyPool(withDisabled(2, false), parseConfig({}), new Set([2])).find(
+      (a) => a.number === 2,
+    )!;
+    expect(acct.reason).toBe("out-of-rotation");
+    expect(acct.cswapDisabled).toBe(false);
+  });
+
+  it("excludeSlots still outranks cswap-disabled", () => {
+    const cfg = parseConfig({ excludeSlots: [2] });
+    const acct = classifyPool(withDisabled(2, true), cfg).find((a) => a.number === 2)!;
+    expect(acct.reason).toBe("excluded-slot");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 0.23 field contract — LAYER 2: normalization must read the keys the real CLI
+// actually emits. A key misspelled consistently across the interface, this
+// reader and a raw-JSON assertion would pass a presence check while the
+// normalized field sat at null; asserting post-classifyPool closes that.
+// ---------------------------------------------------------------------------
+
+describe("classifyPool — captured 0.23 sample normalizes cswap-disabled", () => {
+  it("reads `disabled` off the captured row", () => {
+    const pool = classifyPool(sample023, parseConfig({}));
+    const parked = pool.filter((a) => a.cswapDisabled);
+    expect(parked).toHaveLength(1);
+    expect(parked[0]!.reason).toBe("cswap-disabled");
+    expect(parked[0]!.usable).toBe(false);
   });
 });

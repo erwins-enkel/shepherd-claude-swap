@@ -330,6 +330,8 @@ interface AcctSpec {
   /** null ⇒ window omitted (so classifyPool sees a null pct). */
   fiveHourPct?: number | null;
   sevenDayPct?: number | null;
+  /** cswap 0.21 `disabled` flag; emitted only when true, as the real CLI does. */
+  disabled?: boolean;
 }
 
 interface HealState {
@@ -355,6 +357,7 @@ function listJson(state: HealState): string {
         email: `acct${a.number}@example.com`,
         active: a.active ?? false,
         usageStatus: status,
+        ...(a.disabled === true ? { disabled: true } : {}),
         usage,
       };
     }),
@@ -977,5 +980,47 @@ describe("Prewarmer.healUnavailable — deferred-outcome reconcile (cache race)"
     await prewarmer.healUnavailable();
     // Absent target → early return without judging; "healed" must NOT be flipped to "failed".
     expect(prewarmer.lastHeal?.outcome).toBe("healed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Auto-heal must skip an account cswap has parked. Healing switches the PRIMARY
+// onto its target, so treating a `cswap disable`d account as a heal candidate
+// would drag it back into active use behind the operator's back.
+// ---------------------------------------------------------------------------
+
+describe("Prewarmer.healUnavailable — cswap-disabled accounts are out of scope", () => {
+  it("never selects a cswap-disabled account as a heal target", async () => {
+    const { prewarmer, fake } = makeHealer({
+      active: 1,
+      accts: [
+        { number: 1, active: true },
+        { number: 2, usageStatus: "unavailable", disabled: true },
+      ],
+    });
+    await prewarmer.refresh();
+
+    // Two cycles is the configured threshold — an eligible account would dance here.
+    await prewarmer.healUnavailable();
+    await prewarmer.healUnavailable();
+
+    expect(fake.switchCalls).toHaveLength(0);
+    expect(prewarmer.lastHeal).toBeNull();
+  });
+
+  it("heals the same account once cswap enable clears the flag", async () => {
+    const { prewarmer, fake } = makeHealer({
+      active: 1,
+      accts: [
+        { number: 1, active: true },
+        { number: 2, usageStatus: "unavailable" },
+      ],
+    });
+    await prewarmer.refresh();
+    await prewarmer.healUnavailable();
+    await prewarmer.healUnavailable();
+
+    expect(fake.switchCalls).toEqual([2, 1]);
+    expect(prewarmer.lastHeal?.target).toBe(2);
   });
 });

@@ -24,6 +24,7 @@ function makeAccount(number: number, opts: Partial<PoolAccount> = {}): PoolAccou
     sevenDayResetCountdown: null,
     active: true,
     usageUnavailable: false,
+    cswapDisabled: false,
     scopedWindows: [],
     ...opts,
   };
@@ -654,5 +655,67 @@ describe("assign — two-tier selection", () => {
       expect(result.accountNumber).toBe(1);
       expect(result.nextState).toBe(state);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Honoring `cswap disable` has a resume cost, and it must stay visible.
+//
+// A cswap-disabled row is `usable: false`, so assign()'s resume path aborts and
+// NEVER reassigns; index.ts then hard-aborts under the shipped
+// `abortOnEmpty: true`. That is the same blast radius as the panel's "Take out
+// of rotation" — but the trigger now sits outside the plugin, in a terminal,
+// with no confirmation prompt. These pin the behavior so it cannot regress into
+// a silent reassignment, which would rotate a running session's identity.
+// ---------------------------------------------------------------------------
+
+describe("assign — resume onto a cswap-disabled account", () => {
+  const pinned: SelectionState = { cursor: 0, assignments: { "sess-a": 1 } };
+
+  it("aborts rather than reassigning, even with another account free", () => {
+    const pool = [
+      makeAccount(1, {
+        active: false,
+        usable: false,
+        reason: "cswap-disabled",
+        cswapDisabled: true,
+      }),
+      makeAccount(2, { active: false }),
+    ];
+    const result = assign(pinned, "sess-a", pool, new Set([1, 2]), "round-robin", new Set());
+
+    expect(result.kind).toBe("abort");
+    if (result.kind !== "abort") throw new Error("unreachable");
+    expect(result.reason).toContain("not usable");
+    expect(result.reason).toContain("cswap-disabled");
+    // The pin must survive untouched — a resume is never silently re-pointed.
+    expect(result.nextState).toBe(pinned);
+    expect(result.nextState.assignments["sess-a"]).toBe(1);
+  });
+
+  it("still routes a NEW session to the remaining account", () => {
+    const pool = [
+      makeAccount(1, {
+        active: false,
+        usable: false,
+        reason: "cswap-disabled",
+        cswapDisabled: true,
+      }),
+      makeAccount(2, { active: false }),
+    ];
+    const result = assign(emptyState, "sess-new", pool, new Set([1, 2]), "round-robin", new Set());
+
+    expect(result.kind).toBe("assigned");
+    if (result.kind !== "assigned") throw new Error("unreachable");
+    expect(result.accountNumber).toBe(2);
+  });
+
+  it("resumes normally once cswap enable clears the flag", () => {
+    const pool = [makeAccount(1, { active: false }), makeAccount(2, { active: false })];
+    const result = assign(pinned, "sess-a", pool, new Set([1, 2]), "round-robin", new Set());
+
+    expect(result.kind).toBe("assigned");
+    if (result.kind !== "assigned") throw new Error("unreachable");
+    expect(result.accountNumber).toBe(1);
   });
 });

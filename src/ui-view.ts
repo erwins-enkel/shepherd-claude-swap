@@ -7,9 +7,17 @@ import type { HealRecord, HealRestoreFailure } from "./prewarm";
 import { History, downsample, CHART_WINDOW, MAX_DETAILED_ACCOUNTS } from "./history";
 
 /** Neutral identity chip so every account row names its account even on a host that does not
- *  render plain `text` nodes (the bug this addresses: bars/rows with no account attribution). */
-function identityBadge(number: number, email: string): PluginUINode {
-  return { type: "badge", props: { label: `#${number} ${email}`, tone: "neutral" } };
+ *  render plain `text` nodes (the bug this addresses: bars/rows with no account attribution).
+ *
+ *  Also the only place a `cswap-disabled` row can say so. The status badge cannot carry it:
+ *  `buildStatusBadge` short-circuits on `active` and then `usageUnavailable`, and `classifyPool`
+ *  orders non-ok `usageStatus` ahead of the cswap-disabled branch — so an active parked account
+ *  badges "primary" and an unavailable one badges its status, both with no rotation button and no
+ *  hint that `cswap enable <n>` is the lever. This label renders unconditionally on every row, in
+ *  both the flat and graphical sections, and costs no extra node. */
+function identityBadge(acct: PoolAccount): PluginUINode {
+  const label = `#${acct.number} ${acct.email}${acct.cswapDisabled ? " · cswap-disabled" : ""}`;
+  return { type: "badge", props: { label, tone: "neutral" } };
 }
 
 /** Reset suffix for a quota caption. Anchored on the absolute `clock` (non-drifting); the
@@ -118,6 +126,7 @@ function returnToRotationButton(acct: PoolAccount): PluginUINode {
 
 /** The rotation toggle button for one account, or null when none applies. Gated by
  *  `cfg.rotationButtons` (host `action-button` support). Config-excluded accounts get none;
+ *  a cswap-disabled account gets none (the panel cannot release that gate — see below);
  *  a set member gets "Return to rotation"; any other non-active account gets "Take out of rotation";
  *  the active account gets none (it is already outside the rotation pool). */
 function rotationButtonFor(
@@ -127,6 +136,9 @@ function rotationButtonFor(
 ): PluginUINode | null {
   if (!cfg.rotationButtons) return null;
   if (isConfigExcluded(cfg, acct.number)) return null;
+  // Parked by cswap itself: the panel cannot release that gate (only `cswap enable <n>` can), so
+  // offering "Return to rotation" would be a lie. The identity label names the lever instead.
+  if (acct.cswapDisabled) return null;
   if (outOfRotation.has(acct.number)) return returnToRotationButton(acct);
   if (!acct.active) return takeOutOfRotationButton(acct);
   return null;
@@ -194,10 +206,7 @@ function buildPoolAccountRow(
   showMakePrimary: boolean,
   rotationButton: PluginUINode | null,
 ): PluginUINode {
-  const header: PluginUINode[] = [
-    identityBadge(acct.number, acct.email),
-    buildStatusBadge(acct, isReady),
-  ];
+  const header: PluginUINode[] = [identityBadge(acct), buildStatusBadge(acct, isReady)];
   if (showMakePrimary && canMakePrimary(acct)) header.push(makePrimaryButton(acct));
   if (rotationButton !== null) header.push(rotationButton);
   return {
@@ -225,7 +234,7 @@ function buildGraphicsAccountNode(
     return {
       type: "stack",
       props: { direction: "vertical" },
-      children: [identityBadge(a.number, a.email), quotaUnknownNote(a.active)],
+      children: [identityBadge(a), quotaUnknownNote(a.active)],
     };
   }
   const fp = a.fiveHourPct ?? 0;
@@ -241,7 +250,7 @@ function buildGraphicsAccountNode(
     type: "stack",
     props: { direction: "vertical" },
     children: [
-      identityBadge(a.number, a.email),
+      identityBadge(a),
       {
         type: "gauge",
         props: {

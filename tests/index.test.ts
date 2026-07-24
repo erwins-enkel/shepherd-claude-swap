@@ -1929,6 +1929,7 @@ describe("computeImminent", () => {
       sevenDayResetCountdown: null,
       active: false,
       usageUnavailable: false,
+      cswapDisabled: false,
       scopedWindows: [],
       ...o,
     };

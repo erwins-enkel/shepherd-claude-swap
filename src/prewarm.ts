@@ -212,14 +212,21 @@ export class Prewarmer {
     return this.switching;
   }
 
-  /** Is account `n` in scope for prewarm/heal (honors include/exclude slot config AND the runtime
-   *  out-of-rotation set)? The out-of-rotation check is separate from classification because a
-   *  taken-out account whose usageStatus is non-ok keeps its `unavailable` reason (classifyPool
-   *  short-circuits before the out-of-rotation branch), yet must still never be a heal target. */
+  /** Is account `n` in scope for prewarm/heal (honors include/exclude slot config, the runtime
+   *  out-of-rotation set AND cswap's own `disabled` flag)?
+   *
+   *  The two rotation gates are read from different places on purpose. `outOfRotation` is consulted
+   *  as the shared set rather than via the pool because a taken-out account whose usageStatus is
+   *  non-ok keeps its `unavailable` reason (classifyPool short-circuits before that branch), and
+   *  because `refresh()` swallows `cswap --list` errors — so after a set-rotation whose follow-up
+   *  refresh failed, the set is already right while the pool is stale. cswap's flag has the
+   *  opposite constraint: it can only ever arrive via a list, so the last good pool is the only
+   *  source, and its staleness is bounded by the refresh interval and never caused by us. */
   private inScope(n: number): boolean {
     return (
       !this.cfg.excludeSlots.includes(n) &&
       !this.outOfRotation.has(n) &&
+      this.pool.find((a) => a.number === n)?.cswapDisabled !== true &&
       (this.cfg.includeSlots === null || this.cfg.includeSlots.includes(n))
     );
   }

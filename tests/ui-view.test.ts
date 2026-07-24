@@ -29,6 +29,7 @@ function makeAccount(number: number, opts: Partial<PoolAccount> = {}): PoolAccou
     sevenDayResetCountdown: null,
     active: true,
     usageUnavailable: false,
+    cswapDisabled: false,
     scopedWindows: [],
     ...opts,
   };
@@ -304,6 +305,7 @@ describe("buildUIView — quota-unknown account", () => {
     makeAccount(10, {
       active: false,
       usageUnavailable: true,
+      cswapDisabled: false,
       fiveHourPct: null,
       sevenDayPct: null,
     }),
@@ -410,6 +412,7 @@ describe("buildUIView — primary account (active: true)", () => {
       makeAccount(12, {
         active: true,
         usageUnavailable: true,
+        cswapDisabled: false,
         fiveHourPct: null,
         sevenDayPct: null,
       }),
@@ -427,6 +430,7 @@ describe("buildUIView — primary account (active: true)", () => {
       makeAccount(12, {
         active: true,
         usageUnavailable: true,
+        cswapDisabled: false,
         fiveHourPct: null,
         sevenDayPct: null,
       }),
@@ -814,6 +818,7 @@ const pickerPool: PoolAccount[] = [
     fiveHourPct: null,
     sevenDayPct: null,
     usageUnavailable: true,
+    cswapDisabled: false,
   }), // quota-unknown but usable — INTENTIONALLY eligible
 ];
 const pickerReady = new Set([2]);
@@ -1194,5 +1199,86 @@ describe("buildUIView — heal integration", () => {
     const text = restoreCallout?.props?.["text"] as string;
     expect(text).toContain("#99");
     expect(text).toContain("2");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cswap-disabled rows: no button, and the identity label carries the reason.
+//
+// The status badge cannot carry it — buildStatusBadge short-circuits on
+// `active` then `usageUnavailable`, and classifyPool orders non-ok usageStatus
+// ahead of the cswap-disabled branch. Those rows would otherwise show no button
+// and no hint that `cswap enable <n>` is the lever.
+// ---------------------------------------------------------------------------
+
+/** Every identity-badge label in the view (both the flat and graphical sections). */
+function identityLabels(root: PluginUINode): string[] {
+  return findByType(root, "badge")
+    .map((b) => String(b.props?.["label"] ?? ""))
+    .filter((l) => l.startsWith("#"));
+}
+
+describe("buildUIView — cswap-disabled rows", () => {
+  const parked = (over: Partial<PoolAccount> = {}): PoolAccount[] => [
+    makeAccount(1, { active: true }),
+    makeAccount(2, {
+      active: false,
+      usable: false,
+      reason: "cswap-disabled",
+      cswapDisabled: true,
+      ...over,
+    }),
+  ];
+
+  it("renders neither rotation button for a cswap-disabled account", () => {
+    const v = buildUIView(cfgRotationOnly, parked(), new Set(), baseState, null, null);
+    expect(rotationAccounts(v.root, "Take out of rotation")).toEqual([]);
+    expect(rotationAccounts(v.root, "Return to rotation")).toEqual([]);
+  });
+
+  it("marks the identity label so the lever is discoverable", () => {
+    const v = buildUIView(cfgRotationOnly, parked(), new Set(), baseState, null, null);
+    const marked = identityLabels(v.root).filter((l) => l.includes("cswap-disabled"));
+    // Both the flat pool row and the graphical section carry it.
+    expect(marked.length).toBeGreaterThanOrEqual(1);
+    for (const l of marked) expect(l).toContain("#2 acct2@example.com");
+  });
+
+  it("marks an ACTIVE cswap-disabled row, whose badge reads 'primary'", () => {
+    const v = buildUIView(
+      cfgRotationOnly,
+      [makeAccount(1, { active: true, cswapDisabled: true })],
+      new Set(),
+      baseState,
+      null,
+      null,
+    );
+    const badges = findByType(v.root, "badge").map((b) => String(b.props?.["label"] ?? ""));
+    expect(badges).toContain("primary");
+    expect(identityLabels(v.root).some((l) => l.includes("cswap-disabled"))).toBe(true);
+  });
+
+  it("marks a quota-unknown cswap-disabled row, whose badge reads its status", () => {
+    const v = buildUIView(
+      cfgRotationOnly,
+      parked({ usageUnavailable: true, fiveHourPct: null, sevenDayPct: null }),
+      new Set(),
+      baseState,
+      null,
+      null,
+    );
+    expect(identityLabels(v.root).some((l) => l.includes("cswap-disabled"))).toBe(true);
+  });
+
+  it("leaves an ordinary row's label unmarked", () => {
+    const v = buildUIView(
+      cfgRotationOnly,
+      [makeAccount(1, { active: false })],
+      new Set(),
+      baseState,
+      null,
+      null,
+    );
+    expect(identityLabels(v.root).some((l) => l.includes("cswap-disabled"))).toBe(false);
   });
 });
