@@ -293,9 +293,10 @@ target, which would drag a parked account back into active use.
 The plugin **never writes** cswap's flag: each gate is released where it was set. `cswap enable <n>`
 does not clear a park you made from the panel, and the panel cannot clear a `cswap disable`. Because
 the panel has no lever for it, a cswap-disabled row shows **no** rotation button — instead its
-identity label carries a `cswap-disabled` marker naming the command that releases it. (The status
-badge cannot carry that: an active parked account badges `primary`, and a quota-unknown one badges
-its status.) When both gates are set, `cswap-disabled` is reported first, and the row falls back to
+identity label carries a `cswap-disabled` marker, so the row explains _why_ it is out even though
+the panel cannot put it back. (The status badge cannot carry that: an active parked account badges
+`primary`, and a quota-unknown one badges its status.) The marker names the gate, not the remedy —
+the release is `cswap enable <n>`, documented here rather than repeated in every row label. When both gates are set, `cswap-disabled` is reported first, and the row falls back to
 `out-of-rotation` — with its working button — once you run `cswap enable`.
 
 **Gear menu:** On Shepherd ≥ 1.39.0 the plugin also contributes a **Claude swap usage** entry to

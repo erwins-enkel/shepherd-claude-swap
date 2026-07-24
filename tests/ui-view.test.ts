@@ -1469,6 +1469,87 @@ describe("buildUIView — spend", () => {
   });
 });
 
+describe("buildUIView — spend percentage is display-rounded", () => {
+  // cswap pre-rounds the 5h/7d window pcts but passes spend.pct through from the API verbatim,
+  // so it arrives at full float precision — the captured sample carries 1.3727272727272726.
+  const RAW: SpendInfo = {
+    used: 1.51,
+    limit: 110,
+    pct: 1.3727272727272726,
+    currency: "EUR",
+    resetsAt: null,
+    resetClock: null,
+    resetCountdown: null,
+  };
+
+  it("rounds in the rich caption", () => {
+    const v = buildUIView(cfg, [makeAccount(1, { spend: RAW })], new Set(), baseState, null, null);
+    const spendCaptions = [...findByType(v.root, "meter"), ...findByType(v.root, "gauge")]
+      .filter((n) => String(n.props?.["label"]).includes("· spend"))
+      .map((n) => String(n.props?.["caption"]));
+    expect(spendCaptions.length).toBe(2);
+    for (const c of spendCaptions) {
+      expect(c).toContain("1.4%");
+      expect(c).not.toContain("1.3727272727272726");
+    }
+  });
+
+  it("rounds in the compact label segment", () => {
+    // 16 accounts x 4 windows forces the compact path, where pct is interpolated into the badge.
+    const big = Array.from({ length: 16 }, (_, i) =>
+      makeAccount(i + 1, {
+        active: false,
+        spend: RAW,
+        scopedWindows: ["A", "B", "C", "D"].map((name) => ({
+          name,
+          pct: 10,
+          resetsAt: null,
+          resetClock: null,
+          resetCountdown: null,
+          expectedPct: null,
+          aheadOfPace: false,
+        })),
+      }),
+    );
+    const v = buildUIView(cfg, big, new Set(), baseState, null, null);
+    const badges = findByType(v.root, "badge").map((b) => String(b.props?.["label"] ?? ""));
+    expect(badges.some((l) => l.includes("spend 1.4%"))).toBe(true);
+    expect(badges.some((l) => l.includes("1.3727272727272726"))).toBe(false);
+  });
+
+  it("keeps a whole percentage clean rather than forcing a decimal", () => {
+    const v = buildUIView(
+      cfg,
+      [makeAccount(1, { spend: SPEND })],
+      new Set(),
+      baseState,
+      null,
+      null,
+    );
+    const caption = [...findByType(v.root, "meter")]
+      .filter((n) => String(n.props?.["label"]).includes("· spend"))
+      .map((n) => String(n.props?.["caption"]))[0];
+    expect(caption).toContain("100%");
+  });
+
+  it("tones from the RAW pct, so a near-100 budget is not rounded up into error", () => {
+    const nearly: SpendInfo = { ...RAW, pct: 99.96 };
+    const v = buildUIView(
+      cfg,
+      [makeAccount(1, { spend: nearly })],
+      new Set(),
+      baseState,
+      null,
+      null,
+    );
+    const meter = [...findByType(v.root, "meter")].find((n) =>
+      String(n.props?.["label"]).includes("· spend"),
+    );
+    expect(String(meter?.props?.["caption"])).toContain("100%");
+    expect(meter?.props?.["tone"]).toBe("ok");
+  });
+});
+
 describe("buildUIView — pace", () => {
   const ahead = { expectedPct: 36.7, aheadOfPace: true };
 
@@ -1637,7 +1718,8 @@ describe("buildUIView — identity labels", () => {
 //
 //   nodes(N, S) = BASE + min(N,16) × (perAccount + 2S) + (N > 16 ? 1 : 0)
 //   perAccount = 13 compact | 15 rich (spend meter + gauge)
-//   BASE = 10 with no last-spawn / heal / error nodes; each of those adds its own on top.
+//   BASE = 10. Last-spawn and last-heal always emit a node (placeholder when null), so they are
+//   already inside it; only the two error callouts vary, giving a worst-case BASE of 12.
 //
 // `S` is externally driven (cswap emits one weekly window per model), so any
 // claim pinned at a single S is an overclaim — which is exactly the flaw in the
@@ -1697,7 +1779,7 @@ describe("buildUIView — four-cap budget grid", () => {
   const WINDOWS = [0, 1, 2, 3, 4, 6, 8];
 
   /** Predicted node count; the closed form the rich/compact switch is derived from. */
-  const BASE_NODES = 10; // with no last-spawn / heal / error sections present
+  const BASE_NODES = 10; // no error callouts present; each of the two would add one
   const predict = (n: number, s: number, rich: boolean): number =>
     BASE_NODES +
     Math.min(n, MAX_DETAILED_ACCOUNTS) * ((rich ? 15 : 13) + 2 * s) +

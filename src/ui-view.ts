@@ -13,8 +13,10 @@ import { History, downsample, CHART_WINDOW, MAX_DETAILED_ACCOUNTS } from "./hist
  *  `buildStatusBadge` short-circuits on `active` and then `usageUnavailable`, and `classifyPool`
  *  orders non-ok `usageStatus` ahead of the cswap-disabled branch — so an active parked account
  *  badges "primary" and an unavailable one badges its status, both with no rotation button and no
- *  hint that `cswap enable <n>` is the lever. This label renders unconditionally on every row, in
- *  both the flat and graphical sections, and costs no extra node. */
+ *  indication of why. The marker is the reason, not the remedy — it reads `cswap-disabled`, which
+ *  names the cswap-side gate; the README documents `cswap enable <n>` as the release. This label
+ *  renders unconditionally on every row, in both the flat and graphical sections, and costs no
+ *  extra node. */
 function identityBadge(acct: PoolAccount, spendInline: boolean): PluginUINode {
   const age = usageAgeLabel(acct.usageAgeSeconds);
   const segments = [
@@ -53,10 +55,20 @@ function usageAgeLabel(ageSeconds: number | null): string | null {
   return mins < 60 ? `${mins}m` : `${Math.round(mins / 60)}h`;
 }
 
+/** Display-rounded spend percentage.
+ *
+ *  cswap pre-rounds the 5h/7d window pcts, which is why `quotaCaption` can interpolate them raw —
+ *  but it passes `spend.pct` through from the API verbatim, and that arrives at full float
+ *  precision (a live account reports `1.3727272727272726`). Rounded only for display; the raw
+ *  value still drives the tone threshold, so a 99.96% budget is not rounded up into `error`. */
+function spendPctLabel(spend: SpendInfo): string {
+  return `${Math.round(spend.pct * 10) / 10}%`;
+}
+
 /** Compact spend text for the identity label: `spend <pct>% (<used>/<limit> <CUR>)`. */
 function spendSegment(spend: SpendInfo): string {
   return (
-    `spend ${spend.pct}% (${spend.used}/${spend.limit} ${spend.currency}` +
+    `spend ${spendPctLabel(spend)} (${spend.used}/${spend.limit} ${spend.currency}` +
     `${resetSuffix(spend.resetClock, spend.resetCountdown)})`
   );
 }
@@ -275,7 +287,7 @@ function spendMeter(accountNumber: number, spend: SpendInfo): PluginUINode {
       label: `#${accountNumber} · spend`,
       value: spend.pct,
       max: 100,
-      caption: `${spend.used}/${spend.limit} ${spend.currency}${resetSuffix(spend.resetClock, spend.resetCountdown)}`,
+      caption: `${spendPctLabel(spend)} · ${spend.used}/${spend.limit} ${spend.currency}${resetSuffix(spend.resetClock, spend.resetCountdown)}`,
       tone: spend.pct >= 100 ? "error" : "ok",
     },
   };
@@ -319,7 +331,7 @@ function spendGauge(accountNumber: number, spend: SpendInfo): PluginUINode {
       value: spend.pct,
       max: 100,
       tone: spend.pct >= 100 ? "error" : "ok",
-      caption: `${spend.used}/${spend.limit} ${spend.currency}${resetSuffix(spend.resetClock, spend.resetCountdown)}`,
+      caption: `${spendPctLabel(spend)} · ${spend.used}/${spend.limit} ${spend.currency}${resetSuffix(spend.resetClock, spend.resetCountdown)}`,
     },
   };
 }
@@ -454,18 +466,19 @@ function buildRestoreFailureCallout(rf: HealRestoreFailure): PluginUINode {
   };
 }
 
-/** Build a `settings-panel` PluginUIView with the same data as buildStatus. */
 /**
  * Node budget for the rich (spend meter + gauge) rendering.
  *
  * The view's node count is an exact closed form, verified against this builder across accounts ×
  * scoped-window combinations:
  *
- *   nodes(N, S) = 12 + min(N, MAX_DETAILED_ACCOUNTS) × (perAccount + 2S) + (N > 16 ? 1 : 0)
+ *   nodes(N, S) = BASE + min(N, MAX_DETAILED_ACCOUNTS) × (perAccount + 2S) + (N > 16 ? 1 : 0)
  *   perAccount = 13 compact | 15 rich
+ *   BASE       = 10, plus one per error callout present (restoreFailure, lastError) ⇒ 12 worst case.
+ *                Last-spawn and last-heal emit placeholder nodes when null, so they never vary it.
  *
  * The host validator drops the ENTIRE view above MAX_NODES = 256, so the per-account budget is
- * 256 − 12 = 244; 220 leaves ~10% headroom for future base growth. `S` is externally driven —
+ * 256 − 12 (worst-case BASE) = 244; 220 leaves ~10% headroom for future growth. `S` is externally driven —
  * cswap emits one weekly window per model with a per-model limit — so a fixed account threshold
  * would silently overclaim at a different `S` (at S=8 the rich path blows the cap at 8 accounts).
  */
@@ -480,6 +493,7 @@ function useRichSpend(pool: PoolAccount[]): boolean {
   return rendered.length * (15 + 2 * s) <= RICH_NODE_BUDGET;
 }
 
+/** Build a `settings-panel` PluginUIView with the same data as buildStatus. */
 export function buildUIView(
   cfg: ResolvedConfig,
   pool: PoolAccount[],

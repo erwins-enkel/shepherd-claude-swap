@@ -40,7 +40,9 @@ collapsing any surplus into one `"+N more accounts"` text node, and downsamples 
 ```
 nodes(N, S) = BASE + min(N, 16) × (perAccount + 2S) + (N > 16 ? 1 : 0)
 
-  BASE        10, plus one node per optional section present (last-spawn, heal, error callouts)
+  BASE        10, plus one per error callout present (restoreFailure, lastError) => 12 worst case.
+              Last-spawn and last-heal always emit a node (a placeholder when null), so they are
+              already inside the 10 and never vary it. An empty pool adds one "No accounts" node.
   perAccount  13 compact | 15 rich (spend meter + gauge)
   2S          one meter + one gauge per scoped weekly window
   +1          the "+N more accounts" node, above MAX_DETAILED_ACCOUNTS
@@ -61,7 +63,8 @@ and asserts that no over-cap combination is caused by that switch.
 
 From `S = 2` the compact path has a hard account ceiling well below the 16-account truncation limit
 — 14 accounts at `S = 2`, 12 at `S = 3`, 11 at `S = 4`, 9 at `S = 6`, 8 at `S = 8` — because
-truncation caps at 16 detailed accounts and `16 × (13 + 2·2) = 218 + BASE` already exceeds the cap.
+truncation caps at 16 detailed accounts and `16 × (13 + 2·2) = 272`, which is already over the
+256 cap before BASE is even added.
 Beyond those ceilings the host drops the whole view.
 
 This predates the 0.23 field work and is caused by the per-scoped-window meter and gauge, not by
