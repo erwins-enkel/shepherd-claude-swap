@@ -32,14 +32,18 @@ export interface CswapScopedWindow extends CswapWeeklyWindow {
  * monthly_limit AND utilization are all non-null, so those four are required here; an unlimited
  * plan (monthly_limit null) omits the whole entry rather than reporting a zero limit. `pct` is the
  * API's `utilization` verbatim and is NOT derivable from used/limit — a live account reports
- * used 100.33 / limit 100.00 with pct 100.0. The reset trio appears together or not at all.
+ * used 100.33 / limit 100.00 with pct 100.0.
+ *
+ * cswap emits `resetsAt`/`countdown`/`clock` together, only when the API supplies a reset instant.
+ * Only the two display strings are typed: nothing reads the raw `resetsAt` anchor for spend (unlike
+ * the window-level one, which feeds `GET stats` and `computeResetOrder`), so typing it would be
+ * unread surface.
  */
 export interface CswapSpend {
   used: number;
   limit: number;
   pct: number;
   currency: string;
-  resetsAt?: string;
   countdown?: string;
   clock?: string;
 }

@@ -97,12 +97,13 @@ which is well beyond adopting 0.23 fields. It is therefore a documented README l
 
 ### Deliberately unconsumed
 
-| Field                                      | Why not                                                                                                                                                                                                              |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `projectedExhaustionAt`, `willLastToReset` | cswap documents both as JSON-only because the linear projection has wide error bars against bursty usage, and keeps them out of every human-facing surface. Nothing here reads them; typing them would be dead data. |
-| `usageFetchedAt`                           | Only the derived `usageAgeSeconds` is read. Typing the absolute anchor too would be unread surface.                                                                                                                  |
-| `isOrganization`, `organizationUuid`       | Nothing reads them. (`organizationUuid` is the field a future fix for §3 would likely key pins on.)                                                                                                                  |
-| `switchable`                               | Exists on cswap's internal snapshot but is **not** emitted to JSON.                                                                                                                                                  |
+| Field                                      | Why not                                                                                                                                                                                                                                                                                                             |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `projectedExhaustionAt`, `willLastToReset` | cswap documents both as JSON-only because the linear projection has wide error bars against bursty usage, and keeps them out of every human-facing surface. Nothing here reads them; typing them would be dead data.                                                                                                |
+| `usageFetchedAt`                           | Only the derived `usageAgeSeconds` is read. Typing the absolute anchor too would be unread surface.                                                                                                                                                                                                                 |
+| `spend.resetsAt`                           | Same shape: only the derived `countdown` / `clock` display strings are read. Unlike the window-level `resetsAt` — which reaches `GET stats` via `buildStatus` and drives `computeResetOrder` — spend has no such consumer (`buildStatus` does not emit `spend` at all), so carrying the anchor would be write-only. |
+| `isOrganization`, `organizationUuid`       | Nothing reads them. (`organizationUuid` is the field a future fix for §3 would likely key pins on.)                                                                                                                                                                                                                 |
+| `switchable`                               | Exists on cswap's internal snapshot but is **not** emitted to JSON.                                                                                                                                                                                                                                                 |
 
 ### No upstream precedent for the 7-day headroom band
 
@@ -142,12 +143,13 @@ organisation, which is what the panel's organisation segment exists to disambigu
 
 Some fields are API-driven and **cannot be arranged by any cswap command**: `compute_pace()` returns
 `None` within 24 h of a window reset, `aheadOfPace: true` additionally needs the live burn rate to be
-≥15 pp over expected, and spend's reset trio is emitted only when the API supplies a reset instant
+≥15 pp over expected, and spend's reset fields are emitted only when the API supplies a reset instant
 (`if "resets_at" in spend`). The plan therefore reserved a labelled synthetic fallback fixture.
 
 The pace fields did not need it — this capture happened to contain them, including a genuinely
-ahead-of-pace window. **Three fields did**: neither spend-carrying account on this host has a reset
-instant, so no capture here could contain `spend.resetsAt` / `countdown` / `clock`.
+ahead-of-pace window. **Two consumed fields did**: neither spend-carrying account on this host has a
+reset instant, so no capture here could contain `spend.countdown` / `spend.clock`. (cswap emits
+`spend.resetsAt` alongside them; the plugin deliberately does not carry it — see §4.)
 
 | Field                                       | Present in the capture                                                 |
 | ------------------------------------------- | ---------------------------------------------------------------------- |
@@ -155,16 +157,19 @@ instant, so no capture here could contain `spend.resetsAt` / `countdown` / `cloc
 | `organizationName`                          | ✅ all three                                                           |
 | `usageAgeSeconds`                           | ✅ all three                                                           |
 | `spend.used` / `limit` / `pct` / `currency` | ✅ slots 1 and 2; slot 3 has no plan (so the null path is covered too) |
-| `spend.resetsAt` / `countdown` / `clock`    | ❌ **not present** — see below                                         |
+| `spend.countdown` / `spend.clock`           | ❌ **not present** — see below                                         |
 | `expectedPct`, `aheadOfPace` (7d)           | ✅ all three                                                           |
 | `aheadOfPace: true` specifically            | ✅ slot 3's 7-day window                                               |
 | `expectedPct`, `aheadOfPace` (scoped)       | ✅ all three                                                           |
 
 #### The one gap, and how far it is closed
 
-`cswap-list-0.23.synthetic.json` carries those three keys and nothing else is asserted from it. It is
-labelled synthetic in its own `//` field, and the honest limitation stands: **their spellings are the
-only consumed keys in this work not verified against live CLI output.**
+`cswap-list-0.23.synthetic.json` is **authoritative for nothing except `spend.countdown` and
+`spend.clock`.** It is a whole account row, so tests reading it necessarily touch other fields —
+`used` / `limit` / `pct` / `currency` are asserted from it too — but each of those is independently
+asserted from the captured sample, so no guarantee rests on the synthetic file alone. It is labelled
+synthetic in its own `//` field, and the honest limitation stands: **those two spellings are the only
+consumed keys in this work not verified against live CLI output.**
 
 Two things narrow the risk. Their spellings are transcribed from `json_output.py` → `usage_to_json`,
 not guessed. And that function derives them from the _same_ code path as the `fiveHour` / `sevenDay`
@@ -172,12 +177,12 @@ reset trio, which the captured sample **does** verify against live output — a 
 cswap emitting one spelling for window resets and another for spend resets from adjacent lines of the
 same function.
 
-What the synthetic fixture still buys is the reader half of the contract: `toSpend` misspelling one of
-the three would leave the field `null`, indistinguishable from cswap not sending it, and now fails a
-test instead.
+What the synthetic fixture still buys is the reader half of the contract: `toSpend` misspelling either
+one would leave the field `null`, indistinguishable from cswap not sending it, and now fails a test
+instead.
 
-Every other assertion reads from real CLI output. Two test layers use the captured sample, because two
-independent misspellings are possible:
+Every guarantee other than those two spellings rests on real CLI output. Two test layers use the
+captured sample, because two independent misspellings are possible:
 
 - **Layer 1** (`tests/cswap.test.ts`) — asserts each field is reachable through the **typed
   accessor**, catching an interface key that disagrees with cswap.

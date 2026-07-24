@@ -619,12 +619,13 @@ describe("classifyPool — captured 0.23 sample normalizes every consumed field"
 });
 
 // ---------------------------------------------------------------------------
-// The three CONDITIONAL spend reset keys.
+// The CONDITIONAL spend reset display strings.
 //
-// cswap emits spend's resetsAt/countdown/clock only when the API supplies a
-// reset instant (json_output.py: `if "resets_at" in spend`). Neither account
-// on the capture host has one, so no live capture there could carry them —
-// yet all three are consumed (toSpend -> resetSuffix). This uses the labelled
+// cswap emits spend's countdown/clock (alongside a raw resetsAt this plugin
+// does not carry) only when the API supplies a reset instant (json_output.py:
+// `if "resets_at" in spend`). Neither account on the capture host has one, so
+// no live capture there could carry them — yet both are consumed
+// (toSpend -> resetSuffix). This uses the labelled
 // synthetic fixture reserved for exactly that case; every other field is
 // asserted against the captured sample instead. See cswap-0.23-fields.md §5.
 // ---------------------------------------------------------------------------
@@ -632,10 +633,9 @@ describe("classifyPool — captured 0.23 sample normalizes every consumed field"
 describe("classifyPool — conditional spend reset keys (synthetic fixture)", () => {
   const synthetic = syntheticRaw as unknown as CswapListResult;
 
-  it("normalizes all three, so a reader misspelling cannot pass silently", () => {
+  it("normalizes both display strings, so a reader misspelling cannot pass silently", () => {
     const acct = classifyPool(synthetic, parseConfig({}))[0]!;
     expect(acct.spend).not.toBeNull();
-    expect(acct.spend!.resetsAt).toBe("2026-08-01T00:00:00+00:00");
     expect(acct.spend!.resetCountdown).toBe("7d 4h");
     expect(acct.spend!.resetClock).toBe("Aug 1 02:00");
   });
@@ -648,11 +648,10 @@ describe("classifyPool — conditional spend reset keys (synthetic fixture)", ()
     expect(acct.spend!.currency).toBe("EUR");
   });
 
-  it("captured-sample accounts omit the trio entirely, which must read as null", () => {
+  it("captured-sample accounts omit them entirely, which must read as null", () => {
     // The real-world shape: cswap sends no reset instant for these spend blocks.
     for (const acct of classifyPool(sample023, parseConfig({}))) {
       if (acct.spend === null) continue;
-      expect(acct.spend.resetsAt).toBeNull();
       expect(acct.spend.resetCountdown).toBeNull();
       expect(acct.spend.resetClock).toBeNull();
     }

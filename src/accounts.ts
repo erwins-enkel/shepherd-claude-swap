@@ -33,7 +33,9 @@ export interface SpendInfo {
   limit: number;
   pct: number;
   currency: string;
-  resetsAt: string | null;
+  /** Display strings only. The raw `resetsAt` anchor is deliberately not carried: nothing reads it
+   *  (unlike the window-level ones, which reach `GET stats` and `computeResetOrder`), so typing it
+   *  would be write-only surface — the same reason `usageFetchedAt` is left off `PoolAccount`. */
   resetClock: string | null;
   resetCountdown: string | null;
 }
@@ -116,7 +118,6 @@ function toSpend(spend: CswapSpend | undefined): SpendInfo | null {
     // cswap's own `utilization`, NOT used/limit — a live account reports 100.33/100.00 at pct 100.
     pct: spend.pct,
     currency: spend.currency,
-    resetsAt: spend.resetsAt ?? null,
     resetClock: spend.clock ?? null,
     resetCountdown: spend.countdown ?? null,
   };

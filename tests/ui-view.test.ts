@@ -1045,7 +1045,7 @@ describe("buildUIView — scoped weekly windows", () => {
           {
             name: "Fable",
             pct: 39,
-            resetsAt: "2026-07-08T08:59:00.000Z",
+            resetsAt: null,
             resetClock: "Jul 8 08:59",
             resetCountdown: "3d 22h",
             expectedPct: null,
@@ -1349,7 +1349,6 @@ const SPEND: SpendInfo = {
   limit: 100,
   pct: 100,
   currency: "EUR",
-  resetsAt: null,
   resetClock: null,
   resetCountdown: null,
 };
@@ -1477,7 +1476,6 @@ describe("buildUIView — spend reset suffix", () => {
     limit: 100,
     pct: 12.5,
     currency: "EUR",
-    resetsAt: "2026-08-01T00:00:00+00:00",
     resetClock: "Aug 1 02:00",
     resetCountdown: "7d 4h",
   };
@@ -1543,7 +1541,6 @@ describe("buildUIView — spend percentage is display-rounded", () => {
     limit: 110,
     pct: 1.3727272727272726,
     currency: "EUR",
-    resetsAt: null,
     resetClock: null,
     resetCountdown: null,
   };
