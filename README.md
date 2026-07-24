@@ -24,6 +24,24 @@ These are correctness preconditions — without them the plugin misbehaves silen
    `cswap --add-account`. The plugin consumes accounts; it never adds them. The binary must
    be the one from [realiti4/claude-swap](https://github.com/realiti4/claude-swap) (MIT).
 
+   **Minimum verified version: 0.23.0.** Older releases work for core rotation, but the panel
+   degrades _by omission_ — a field cswap does not send simply does not render, which looks
+   identical to a plugin bug. What needs what:
+
+   | Capability                                               | Requires   |
+   | -------------------------------------------------------- | ---------- |
+   | Core rotation (list / switch / `run` / session profiles) | 0.14.0     |
+   | Organisation name in account labels                      | ≤ 0.14.0   |
+   | `cswap disable` / `enable` and the `cswap-disabled` row  | **0.21.0** |
+   | Account aliases in labels                                | **0.21.0** |
+   | "ahead of pace" annotation and the usage-age note        | **0.23.0** |
+   | Spend meter / segment                                    | **0.23.0** |
+
+   On a cswap without `disable`/`enable`, those commands argparse-error and no account is ever
+   `cswap-disabled` — that is expected, not a fault. Full evidence, including which fields were
+   verified against live CLI output, is in
+   [docs/contracts/cswap-0.23-fields.md](docs/contracts/cswap-0.23-fields.md).
+
 2. **Trusted (non-membrane) spawn profile (normal sessions).** On a host predating
    shepherd#1217, a sandbox/membrane profile does not bind the injected per-account
    `credentialDir` into the jail — `claude` would see an empty dir — so run normal sessions under
@@ -206,7 +224,14 @@ operator-triggered global switch is available out of band via `POST switch-prima
 (never called by the hot path).
 
 **Status panel:** Open Settings → Plugins in the Shepherd UI to see per-account 5h/7d quota,
-current session→account assignments, and the last spawn decision in real time. An account whose quota `cswap` cannot currently report shows a **quota unknown** badge instead of a misleading `0%` meter. The active ("primary") account shows a **primary** badge. When the installed `cswap` reports per-model weekly limits (`usage.scoped`, unreleased as of claude-swap 0.16.0) — e.g. Fable — they appear as additional `<Model> wk` meters/gauges alongside the 5h/7d quota.
+current session→account assignments, and the last spawn decision in real time. An account whose quota `cswap` cannot currently report shows a **quota unknown** badge instead of a misleading `0%` meter. The active ("primary") account shows a **primary** badge. When the installed `cswap` reports per-model weekly limits (`usage.scoped`, cswap 0.19+) — e.g. Fable — they appear as additional `<Model> wk` meters/gauges alongside the 5h/7d quota.
+
+On **cswap 0.23+** each account row carries more of what cswap now reports:
+
+- **Spend.** A pay-as-you-go budget (`usage.spend`) renders as its own meter and gauge, tinted red at 100%. It is **display-only** — a maxed spend budget never marks an account rate-limited or removes it from rotation. Accounts with no such plan show nothing (that is "no plan", not "unknown"). On a large pool the spend figure folds into the account label instead, to stay inside the host's node budget for the panel; the switch is automatic and depends on how many accounts and per-model windows you have.
+- **Ahead of pace.** A weekly window burning faster than the week's elapsed fraction is annotated `· ahead of pace (expected N%)` and tinted amber. cswap noise-gates this itself (≥15 pp over expected, suppressed for 24h after a reset), so the plugin shows it verbatim rather than second-guessing it.
+- **Stale usage.** If cswap's usage measurement is older than 5 minutes, the label notes `usage <age> old (at last refresh)`. It is normally absent — cswap polls about every 3 minutes — and appears when cswap is serving a last-good snapshot. The wording is deliberate: the age is cswap's own, as of this plugin's last refresh, so it can under-report by up to one `refreshIntervalMs`.
+- **Aliases and organisations.** An alias set with `cswap alias` renders **alongside** the email, never instead of it — the email is what maps a row to its on-disk profile under `sessions/<n>-<emailSlug>/`. The organisation name is appended too, which is what distinguishes two accounts that share an email address.
 
 **Make primary picker:** each eligible non-primary account row carries a **Make primary** button
 (a `publishUI` `action-button`) that POSTs `{ mode: "specific", account }` to the plugin's own
@@ -250,6 +275,28 @@ flag is harmless — the account is unusable regardless.)
 Like the Make-primary picker, this requires the host `action-button` renderer and is gated by
 `rotationButtons` (default `true`); set `"rotationButtons": false` on an older host to fall back to
 the badge-only view.
+
+#### `cswap disable` is honoured too (read-only)
+
+An account you park with **`cswap disable <n>`** (cswap ≥ 0.21, from the CLI or TUI) also leaves the
+pool: it becomes `usable:false, reason:"cswap-disabled"`, new sessions skip it, and it is never
+warmed or auto-healed. Auto-heal in particular must skip it — healing switches the _primary_ onto its
+target, which would drag a parked account back into active use.
+
+> **A pinned resume aborts.** Exactly as with **Take out of rotation**, any session pinned to that
+> account becomes unresumable until you run `cswap enable <n>` (already-running agents keep their
+> credentials and are unaffected). The difference is that the CLI asks for no confirmation, so this
+> is easy to trigger without connecting it to Shepherd resumes. With the default
+> `abortOnEmpty: true` the resume is refused outright; with `abortOnEmpty: false` it instead fails
+> open onto the **default login**, which silently rotates that session's account identity.
+
+The plugin **never writes** cswap's flag: each gate is released where it was set. `cswap enable <n>`
+does not clear a park you made from the panel, and the panel cannot clear a `cswap disable`. Because
+the panel has no lever for it, a cswap-disabled row shows **no** rotation button — instead its
+identity label carries a `cswap-disabled` marker naming the command that releases it. (The status
+badge cannot carry that: an active parked account badges `primary`, and a quota-unknown one badges
+its status.) When both gates are set, `cswap-disabled` is reported first, and the row falls back to
+`out-of-rotation` — with its working button — once you run `cswap enable`.
 
 **Gear menu:** On Shepherd ≥ 1.39.0 the plugin also contributes a **Claude swap usage** entry to
 the top-bar gear menu (desktop dropdown + mobile sheet). Clicking it opens Settings → Plugins
@@ -457,6 +504,17 @@ diff /tmp/before.json /tmp/after.json
 - **v1 scope.** Account add/login/token-refresh is `cswap`'s job; the plugin does not
   reimport accounts, predict rate-limit exhaustion beyond what `cswap` reports, or support
   multi-host coordination. See [docs/PRD.md §3](docs/PRD.md) for the full non-goals list.
+
+- **Do not run `cswap auto` alongside this plugin.** Both drive the primary account, so they
+  fight: `cswap auto` switches the primary out from under sessions the plugin has pinned. The
+  plugin _is_ the switcher — that is why `reset-soon` ports the ranking from cswap's
+  `consume-first` strategy rather than delegating to the daemon.
+
+- **Do not use `cswap move` / `cswap swap` while sessions are pinned.** They exchange accounts'
+  slot numbers, and cswap moves everything slot-keyed with them (credentials, backups, session
+  profile directories). What does _not_ move is this plugin's pin map, which keys sessions on the
+  slot number — so a session pinned to slot 2 would resume onto whatever account now occupies slot 2. The plugin cannot detect this: the stored number is still valid, it just means something else.
+  Reorder slots only when no Shepherd sessions are pinned.
 
 - **Selection strategy is configurable.** New sessions default to round-robin across
   eligible accounts. Set `strategy: "least-used"` to instead assign the account with the
