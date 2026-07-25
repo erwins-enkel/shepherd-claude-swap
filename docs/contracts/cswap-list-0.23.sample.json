@@ -1,0 +1,143 @@
+{
+  "schemaVersion": 1,
+  "activeAccountNumber": 2,
+  "accounts": [
+    {
+      "number": 1,
+      "email": "acct1@example.com",
+      "organizationName": "acct1@example.com's Organization",
+      "organizationUuid": "00000001-0000-0000-0000-000000000000",
+      "isOrganization": true,
+      "active": false,
+      "usageStatus": "ok",
+      "usage": {
+        "fiveHour": {
+          "pct": 0.0
+        },
+        "sevenDay": {
+          "pct": 95.0,
+          "resetsAt": "2026-07-25T15:00:00.330617+00:00",
+          "countdown": "18h 16m",
+          "clock": "Jul 25 17:00",
+          "expectedPct": 89.1,
+          "aheadOfPace": false,
+          "projectedExhaustionAt": "2026-07-25T04:33:17Z",
+          "willLastToReset": false
+        },
+        "spend": {
+          "used": 1.51,
+          "limit": 110.0,
+          "pct": 1.3727272727272726,
+          "currency": "EUR"
+        },
+        "scoped": [
+          {
+            "pct": 23.0,
+            "resetsAt": "2026-07-25T15:00:00.330898+00:00",
+            "countdown": "18h 16m",
+            "clock": "Jul 25 17:00",
+            "expectedPct": 89.1,
+            "aheadOfPace": false,
+            "projectedExhaustionAt": "2026-08-14T17:46:11Z",
+            "willLastToReset": true,
+            "name": "Fable"
+          }
+        ]
+      },
+      "usageFetchedAt": "2026-07-24T20:40:37Z",
+      "usageAgeSeconds": 158.3
+    },
+    {
+      "number": 2,
+      "email": "acct1@example.com",
+      "organizationName": "Example Org",
+      "organizationUuid": "00000002-0000-0000-0000-000000000000",
+      "isOrganization": true,
+      "active": true,
+      "usageStatus": "ok",
+      "usage": {
+        "fiveHour": {
+          "pct": 91.0,
+          "resetsAt": "2026-07-24T21:10:00.567678+00:00",
+          "countdown": "26m",
+          "clock": "23:10"
+        },
+        "sevenDay": {
+          "pct": 61.0,
+          "resetsAt": "2026-07-27T21:59:59.567700+00:00",
+          "countdown": "3d 1h",
+          "clock": "Jul 27 23:59",
+          "expectedPct": 56.4,
+          "aheadOfPace": false,
+          "projectedExhaustionAt": "2026-07-27T09:12:30Z",
+          "willLastToReset": false
+        },
+        "spend": {
+          "used": 100.33,
+          "limit": 100.0,
+          "pct": 100.0,
+          "currency": "EUR"
+        },
+        "scoped": [
+          {
+            "pct": 2.0,
+            "resetsAt": "2026-07-27T21:59:59.567961+00:00",
+            "countdown": "3d 1h",
+            "clock": "Jul 27 23:59",
+            "expectedPct": 56.4,
+            "aheadOfPace": false,
+            "projectedExhaustionAt": "2027-02-03T03:51:46Z",
+            "willLastToReset": true,
+            "name": "Fable"
+          }
+        ]
+      },
+      "usageFetchedAt": "2026-07-24T20:40:37Z",
+      "usageAgeSeconds": 158.3
+    },
+    {
+      "number": 3,
+      "email": "acct3@example.com",
+      "organizationName": "acct3@example.com's Organization",
+      "organizationUuid": "00000003-0000-0000-0000-000000000000",
+      "isOrganization": true,
+      "active": false,
+      "usageStatus": "ok",
+      "usage": {
+        "fiveHour": {
+          "pct": 0.0,
+          "resetsAt": "2026-07-25T00:49:59.973454+00:00",
+          "countdown": "4h 6m",
+          "clock": "Jul 25 02:49"
+        },
+        "sevenDay": {
+          "pct": 94.0,
+          "resetsAt": "2026-07-29T06:59:59.973477+00:00",
+          "countdown": "4d 10h",
+          "clock": "Jul 29 08:59",
+          "expectedPct": 36.7,
+          "aheadOfPace": true,
+          "projectedExhaustionAt": "2026-07-25T00:39:38Z",
+          "willLastToReset": false
+        },
+        "scoped": [
+          {
+            "pct": 10.0,
+            "resetsAt": "2026-07-29T06:59:59.973756+00:00",
+            "countdown": "4d 10h",
+            "clock": "Jul 29 08:59",
+            "expectedPct": 36.7,
+            "aheadOfPace": false,
+            "projectedExhaustionAt": "2026-08-17T00:12:40Z",
+            "willLastToReset": true,
+            "name": "Fable"
+          }
+        ]
+      },
+      "alias": "devbox",
+      "disabled": true,
+      "usageFetchedAt": "2026-07-24T20:43:16Z",
+      "usageAgeSeconds": 0.0
+    }
+  ]
+}

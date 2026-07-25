@@ -4,6 +4,13 @@ All gates run on the target host (Patrick's machine: `cswap 0.14.0`, `claude 2.1
 `bun 1.3.14`) on 2026-06-27. Shepherd source inspected at
 `/home/patrick/Work/shepherd` @ **`9124026a13479ca1d30173bf1f523e8950587051`** (main).
 
+> **Re-verified at cswap 0.23.0** (2026-07-24). Gates **V2**, **V3** and **V5** cover contracts that
+> gate `ready` — a change to any of them means no account is ever warmed and, under
+> `abortOnEmpty: true`, every spawn aborts. They had not been re-checked in four minor cswap
+> releases. All three still hold at 0.23.0, including that the session directory is still keyed on
+> the **email** and not on the `alias` added in 0.21. Evidence:
+> [`cswap-0.23-fields.md`](cswap-0.23-fields.md) → _Compatibility of what the plugin already calls_.
+
 | Gate                                                                                           | Verdict     | Evidence                                                                                                                                                                                                                                                                                                                                                                                                   |
 | ---------------------------------------------------------------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **V1** — Shepherd plugin contract (`SpawnPatch`, `apiVersion`, capabilities, sync `state.set`) | ✅ VERIFIED | `types.ts` vendored at the pinned SHA; `apiVersion` const = 1; `SpawnPatch` = `env`/`extraArgs`/`credentialDir`; `PluginState.set` returns `void` (synchronous).                                                                                                                                                                                                                                           |

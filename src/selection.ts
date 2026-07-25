@@ -23,12 +23,12 @@ export type AssignResult =
  *   - "round-robin": cursor % eligible.length, advance cursor.
  *   - "least-used": account with lowest max(fiveHourPct ?? 100, sevenDayPct ?? 100);
  *     tie-break by lowest account number. Cursor still advances by 1.
- *   - "reset-soon": among eligible accounts whose number is in `imminent` (7-day reset within 24h
- *     with capacity — computed by the caller, see `computeImminent`), pick by the least-used metric;
- *     when none are imminent, fall back to least-used over all eligible. Cursor still advances by 1.
+ *   - "reset-soon": order by soonest 7-day reset (`resetOrder`, computed by the caller — see
+ *     `computeResetOrder`), tie-broken by the least-used metric then account number. Cursor still
+ *     advances by 1.
  *   None eligible → "abort".
  *
- * `imminent` is supplied by the caller (clock lives there) so this stays deterministic; no
+ * `resetOrder` is supplied by the caller (clock lives there) so this stays deterministic; no
  * Date/random here.
  */
 export function assign(
@@ -37,7 +37,7 @@ export function assign(
   pool: PoolAccount[],
   ready: Set<number>,
   strategy: Strategy,
-  imminent: Set<number>,
+  resetOrder: Map<number, number>,
 ): AssignResult {
   const pin = state.assignments[sessionId];
 
@@ -94,7 +94,7 @@ export function assign(
     };
   }
 
-  const picked = pickByStrategy(strategy, eligible, imminent, state.cursor);
+  const picked = pickByStrategy(strategy, eligible, resetOrder, state.cursor);
 
   return {
     kind: "assigned",
@@ -108,37 +108,63 @@ export function assign(
 
 /**
  * Pick the eligible account per `strategy`. Deterministic; no Date/random.
- *  - "reset-soon": prefer eligible accounts in `imminent` (7-day reset within 24h with capacity),
- *    chosen by the least-used metric; fall back to least-used over all eligible when none imminent.
+ *  - "reset-soon": soonest 7-day reset first (`resetOrder`; absent ⇒ Infinity, so unranked accounts
+ *    sort last), tie-broken by the least-used metric then account number.
  *  - "least-used": least-used over all eligible.
  *  - "round-robin": cursor % eligible.length.
  */
 function pickByStrategy(
   strategy: Strategy,
   eligible: PoolAccount[],
-  imminent: Set<number>,
+  resetOrder: Map<number, number>,
   cursor: number,
 ): PoolAccount {
-  if (strategy === "reset-soon") {
-    const imminentEligible = eligible.filter((a) => imminent.has(a.number));
-    return pickLeastUsed(imminentEligible.length > 0 ? imminentEligible : eligible);
-  }
+  if (strategy === "reset-soon") return pickResetSoon(eligible, resetOrder);
   if (strategy === "least-used") return pickLeastUsed(eligible);
   return eligible[cursor % eligible.length]!;
 }
 
 /**
+ * Usage metric for an account: the binding window. A single null pct forces the whole metric to
+ * 100, so an account with unknown usage never wins on it.
+ */
+function usageMetric(a: PoolAccount): number {
+  return Math.max(a.fiveHourPct ?? 100, a.sevenDayPct ?? 100);
+}
+
+/**
+ * Pick by soonest 7-day reset — drain perishable quota before it refills.
+ *
+ * Ordered by `(resetOrder ?? Infinity, usageMetric, number)`. Two properties fall out of that
+ * rather than needing branches:
+ *  - when NO account is ranked (all Infinity) the ordering degenerates exactly to `pickLeastUsed`,
+ *    which is the documented fallback;
+ *  - an account failing either headroom band is absent from `resetOrder`, so it sorts behind every
+ *    ranked account and is reached only as a last resort — then by least-used.
+ */
+function pickResetSoon(eligible: PoolAccount[], resetOrder: Map<number, number>): PoolAccount {
+  return eligible.reduce((best, curr) => {
+    const bestReset = resetOrder.get(best.number) ?? Infinity;
+    const currReset = resetOrder.get(curr.number) ?? Infinity;
+    if (currReset !== bestReset) return currReset < bestReset ? curr : best;
+
+    const bestMetric = usageMetric(best);
+    const currMetric = usageMetric(curr);
+    if (currMetric !== bestMetric) return currMetric < bestMetric ? curr : best;
+
+    return curr.number < best.number ? curr : best;
+  });
+}
+
+/**
  * Pick the eligible account with the lowest usage metric.
- * metric(a) = max(fiveHourPct ?? 100, sevenDayPct ?? 100)
- * A single null pct forces the whole metric to 100.
  * Tie-break: lowest account number. Deterministic; no Date/random.
  */
 function pickLeastUsed(eligible: PoolAccount[]): PoolAccount {
   return eligible.reduce((best, curr) => {
-    const bestMetric = Math.max(best.fiveHourPct ?? 100, best.sevenDayPct ?? 100);
-    const currMetric = Math.max(curr.fiveHourPct ?? 100, curr.sevenDayPct ?? 100);
-    if (currMetric < bestMetric) return curr;
-    if (currMetric === bestMetric && curr.number < best.number) return curr;
-    return best;
+    const bestMetric = usageMetric(best);
+    const currMetric = usageMetric(curr);
+    if (currMetric !== bestMetric) return currMetric < bestMetric ? curr : best;
+    return curr.number < best.number ? curr : best;
   });
 }

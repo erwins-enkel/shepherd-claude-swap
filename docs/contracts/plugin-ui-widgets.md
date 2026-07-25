@@ -33,8 +33,44 @@ plugin's view builder stays under all of them:
 
 The builder enforces a JOINT cap of `MAX_DETAILED_ACCOUNTS = 16` detailed accounts (flat + graphical),
 collapsing any surplus into one `"+N more accounts"` text node, and downsamples chart point arrays to
-`CHART_WINDOW = 60`. A test (`tests/ui-view.test.ts`) proves the worst case (FULL 288-sample rings ×
-16 accounts + 50 spawns, 40-account pool) stays within all four caps.
+`CHART_WINDOW = 60`.
+
+### Node cost is a closed form in accounts × scoped windows
+
+```
+nodes(N, S) = BASE + min(N, 16) × (perAccount + 2S) + (N > 16 ? 1 : 0)
+
+  BASE        10, plus one per error callout present (restoreFailure, lastError) => 12 worst case.
+              Last-spawn and last-heal always emit a node (a placeholder when null), so they are
+              already inside the 10 and never vary it. An empty pool adds one "No accounts" node.
+  perAccount  13 compact | 15 rich (spend meter + gauge)
+  2S          one meter + one gauge per scoped weekly window
+  +1          the "+N more accounts" node, above MAX_DETAILED_ACCOUNTS
+```
+
+`S` is **externally driven** — cswap emits one weekly window per model that has a per-model limit —
+so any budget claim pinned at a single `S` is an overclaim. That is worth stating plainly because
+this section previously claimed a 40-account test "proves the worst case … stays within all four
+caps": that fixture runs at `S = 0` with `active: true` (which suppresses both action-buttons), i.e.
+the cheapest column of the grid. It pins the truncation path, not the worst case.
+
+`tests/ui-view.test.ts` therefore runs a **grid** over N ∈ {1, 3, 8, 12, 14, 16, 17, 20, 40} ×
+S ∈ {0, 1, 2, 3, 4, 6, 8}, with History filled to `QUOTA_RING_CAP` / `SPAWN_RING_CAP`. It verifies
+the closed form exactly, asserts all four caps for every combination the rich/compact switch admits,
+and asserts that no over-cap combination is caused by that switch.
+
+### Known limitation: ≥2 scoped windows can exceed `MAX_NODES`
+
+From `S = 2` the compact path has a hard account ceiling well below the 16-account truncation limit
+— 14 accounts at `S = 2`, 12 at `S = 3`, 11 at `S = 4`, 9 at `S = 6`, 8 at `S = 8` — because
+truncation caps at 16 detailed accounts and `16 × (13 + 2·2) = 272`, which is already over the
+256 cap before BASE is even added.
+Beyond those ceilings the host drops the whole view.
+
+This predates the 0.23 field work and is caused by the per-scoped-window meter and gauge, not by
+spend rendering; the grid test pins the exact set so a newly introduced overflow cannot blend in.
+Fixing it means changing how scoped windows render or lowering `MAX_DETAILED_ACCOUNTS` — tracked
+in issue #56.
 
 ## Chart time-span semantics
 
