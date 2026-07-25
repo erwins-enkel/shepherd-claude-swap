@@ -2025,8 +2025,9 @@ describe("buildUIView — four-cap budget grid", () => {
 
   it("the RICH_NODE_BUDGET <= 243 guard: the two binding pools must stay COMPACT", () => {
     // The load-bearing invariant src/ui-view.ts and both contract docs call out. `useRichSpend` sums
-    // the emitted per-account cost exactly, so a rich view costs at most `budget + BASE(12) +
-    // truncation(1)`; the bound holds only while the budget is <= 243.
+    // a tight UPPER bound on the emitted per-account cost — it over-charges for an active account,
+    // one with no spend plan and a quota-unknown row — so a rich view costs at most
+    // `budget + BASE(12) + truncation(1)`; the bound holds only while the budget is <= 243.
     //
     // Two witnesses, because the binding pool is NOT the uniform one:
     //   - 17 accounts with only TWO windowed: 14x15 + 2x17 = 244. This is the tightest — it goes

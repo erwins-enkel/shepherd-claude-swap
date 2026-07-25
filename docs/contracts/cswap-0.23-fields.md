@@ -217,8 +217,8 @@ cost is uniform in `S` and the view is bounded at 253 of the host's 256 nodes.
 
 The rich/compact spend switch (`Σ over min(N,16) accounts of (15 + (Sᵢ ≥ 1 ? 2 : 0)) ≤ 220`, a
 per-account sum rather than a product — only the sum describes the heterogeneous pools the bound
-below turns on) is stated in terms of `S`
-rather than a fixed account threshold, because `S` is externally driven — cswap emits one weekly
+below turns on) is stated in terms of `S` rather than a fixed account threshold, because `S` is
+externally driven — cswap emits one weekly
 window per model with a per-model limit — so a constant sized at one `S` overclaims at another. Its
 scoped-window term tracks the node closed form exactly: `+2` for any account carrying at least one
 window. It previously charged `2S`, which was accurate before the fold and a large over-estimate

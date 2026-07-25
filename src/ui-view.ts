@@ -627,7 +627,7 @@ function buildRestoreFailureCallout(rf: HealRestoreFailure): PluginUINode {
 /**
  * Node budget for the rich (spend meter + gauge) rendering.
  *
- * The view's node count is an exact closed form, verified against this builder across accounts ×
+ * The view's node count is a closed form, verified against this builder across accounts ×
  * scoped-window combinations:
  *
  *   nodes(N, S) = BASE + Σ over min(N, MAX_DETAILED_ACCOUNTS) accounts of perAccount(Sᵢ)
@@ -638,6 +638,12 @@ function buildRestoreFailureCallout(rf: HealRestoreFailure): PluginUINode {
  *   BASE          = 10, plus one per error callout present (restoreFailure, lastError) ⇒ 12 worst
  *                   case. Last-spawn and last-heal emit placeholder nodes when null, so they never
  *                   vary it.
+ *
+ * `perAccount` is EXACT for the shape the grid test builds — a non-active account, eligible for both
+ * action-buttons, with a spend plan and known quota — which is why the node-count equalities there
+ * hold. Otherwise it is an UPPER BOUND: an active account drops both buttons (−2), one with no spend
+ * plan drops the meter+gauge when rich (−2), and a quota-unknown row costs 10 rather than 15. Those
+ * only ever make a view cheaper, so every bound below still holds.
  *
  * The per-account cost is UNIFORM in S: folding scoped windows (issue #56) makes any account with at
  * least one window cost the same +2, so the host's MAX_NODES = 256 cannot be exceeded:
