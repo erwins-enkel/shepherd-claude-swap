@@ -104,13 +104,19 @@ this section previously claimed a 40-account test "proves the worst case … sta
 caps": that fixture runs at `S = 0` with `active: true` (which suppresses both action-buttons), i.e.
 the cheapest column of the grid. It pins the truncation path, not the worst case.
 
-`tests/ui-view.test.ts` therefore runs a **grid** over N ∈ {1, 3, 8, 12, 14, 16, 17, 20, 40} ×
-S ∈ {0, 1, 2, 3, 4, 6, 8, 12}, with History filled to `QUOTA_RING_CAP` / `SPAWN_RING_CAP`. It
+`tests/ui-view.test.ts` therefore runs a **grid** over N ∈ {1, 3, 8, 12, 13, 14, 15, 16, 17, 20, 40}
+× S ∈ {0, 1, 2, 3, 4, 6, 8, 12}, with History filled to `QUOTA_RING_CAP` / `SPAWN_RING_CAP`. It
 verifies the closed form exactly and asserts all four caps for **every** combination — the sweep was
 previously gated on the rich path, which skipped the compact half entirely. `S = 12` is past
 `MAX_TABLE_ROWS`, so it is the only column where a folded account emits the truncation row (9 rows),
 which is the shape the byte figure above is measured from. The grid is swept once, at BASE 10; the
 BASE-12 maximum belongs to the ceiling fixture.
+
+`N = 13` and `N = 15` are the compact sides of the two rich/compact switch boundaries (12 and 14
+being the rich sides), and `N = 15` is what guards the `RICH_NODE_BUDGET <= 254` bound: at 255 a
+15-account pool with any scoped window flips rich (`15 × 17 = 255`) and reaches 265 nodes, which the
+sweep then fails on. Verified by temporarily raising the constant — four tests fail, including the
+named guard; before `N = 15` was in the grid, none did.
 
 ### Folded per-model rendering (issue #56, fixed)
 

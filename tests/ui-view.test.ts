@@ -1907,7 +1907,11 @@ function fullHistory(pool: PoolAccount[]): History {
 }
 
 describe("buildUIView — four-cap budget grid", () => {
-  const ACCOUNTS = [1, 3, 8, 12, 14, 16, 17, 20, 40];
+  // 13 and 15 are the COMPACT sides of the two rich/compact switch boundaries (12 and 14 are the
+  // rich sides), and 15 is the account count that breaks if RICH_NODE_BUDGET is raised above 254:
+  // at 255 a 15-account pool with any scoped window flips rich (15 x 17 = 255) and reaches 265
+  // nodes, which the caps sweep below then fails on. Without 15 here that invariant is unguarded.
+  const ACCOUNTS = [1, 3, 8, 12, 13, 14, 15, 16, 17, 20, 40];
   // S = 12 is past MAX_TABLE_ROWS (8): it is the only column where a folded account emits the
   // truncation row, i.e. 9 rows — the shape the folded byte worst case is measured from. Without it
   // the grid tops out at exactly 8 rows and never exercises the row cap at pool scale.
@@ -1989,8 +1993,9 @@ describe("buildUIView — four-cap budget grid", () => {
 
   it("the rich branch's own maximum is bounded by RICH_NODE_BUDGET, not by the account cap", () => {
     // The MAX_NODES proof leans on the shipped spend switch: a rich account costs up to 17, which
-    // at 16 accounts would be 272. These two corners are where that gate actually binds, so a
-    // budget bump admitting a 15th rich account fails here rather than silently re-opening the cap.
+    // at 16 accounts would be 272. These two corners pin the rich branch's own maximum (sigma 210
+    // and 204) — they do NOT detect a budget raise, since both stay rich and unchanged at any
+    // higher budget. The raise is caught by the 15-account guard below and by the caps sweep.
     const richNodes = (n: number, s: number) =>
       treeStats(
         buildUIView(
@@ -2007,6 +2012,18 @@ describe("buildUIView — four-cap budget grid", () => {
     expect(richNodes(12, 1)).toBe(214); // sigma 204, its maximum with scoped windows present
   });
 
+  it("15 accounts x 1 window must stay COMPACT — the RICH_NODE_BUDGET <= 254 guard", () => {
+    // The load-bearing invariant src/ui-view.ts and both contract docs call out. A rich account
+    // costs 17 nodes, so the rich branch is only safe while the budget admits at most 14 of them:
+    // floor(220 / 17) = 12 today. At 255 this pool flips rich (15 x 17 = 255 <= 255) and reaches
+    // 265 nodes, over MAX_NODES. Asserting COMPACT here names the invariant at its exact boundary
+    // instead of leaving it to the sweep to notice.
+    const pool = gridPool(15, 1);
+    const v = buildUIView(cfg, pool, new Set(), baseState, null, null, fullHistory(pool));
+    expect(widgetLabels(v.root).some((l) => l.includes("· spend"))).toBe(false);
+    expect(treeStats(v.root).nodeCount).toBe(235);
+  });
+
   it("folded byte corner: 16 accounts x 12 windows (9 rows each) stays under MAX_BYTES", () => {
     // The row cap bounds bytes, and this is the shape it is measured from: 16 rendered accounts
     // each emitting 8 window rows + the truncation row, plus 16 worst-window gauges. Asserted as a
@@ -2020,7 +2037,8 @@ describe("buildUIView — four-cap budget grid", () => {
   });
 
   it("construction ceiling: 17 accounts x S=1 with BOTH error callouts is exactly 253 nodes", () => {
-    // The construction maximum, and the ONLY place both callouts are set (BASE 12 = 10 + 2).
+    // The construction maximum. This and the 16-account variant below are the two fixtures that
+    // set BOTH error callouts (BASE 12 = 10 + 2); everything else in this block runs lighter.
     // Every S >= 1 is equally the corner — with the worst-window gauge any account carrying at
     // least one scoped window costs the same +2 — so S = 0 is the cheap column and S = 1 is chosen
     // here only because it is the smallest such shape. The 17th account is what adds the
@@ -2314,7 +2332,9 @@ describe("buildUIView — row cap and truncation ordering", () => {
     const bytes = Buffer.byteLength(JSON.stringify(v), "utf8");
     expect(bytes).toBeLessThanOrEqual(MAX_BYTES);
     // Measured 57 023 B (87%) against 53 135 B (81%) for the short names of the corner above, i.e.
-    // 144 B per extra character. A tight bound: ~5 KB of slack, not ~13 KB.
+    // 144 B per extra character. The bound leaves 1 477 B of slack over that measurement; the
+    // previous < 62 000 bound left 4 977 B over it, and 15 341 B over the lighter pool it was
+    // actually measuring.
     expect(bytes).toBeLessThan(58_500);
   });
 });
