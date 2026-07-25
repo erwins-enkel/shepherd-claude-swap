@@ -178,7 +178,9 @@ function scopedLabel(accountNumber: number, w: ScopedWindow): string {
 function scopedNote(w: ScopedWindow, rateLimitPct: number): string {
   const pace = paceNote(w);
   const segments = [
-    ...(w.pct >= rateLimitPct ? ["at/over rateLimitPct"] : []),
+    // Derived from `weeklyTone`, not a second copy of its `pct >= rateLimitPct` predicate: this cell
+    // and the worst-window gauge's tint must never be able to disagree about what "at/over" means.
+    ...(weeklyTone(w.pct, rateLimitPct, w) === "error" ? ["at/over rateLimitPct"] : []),
     ...(pace !== "" ? [pace] : []),
   ];
   return segments.join(" · ");
@@ -194,9 +196,10 @@ const SCOPED_COLUMNS = ["model", "used", "resets", "note"];
  * The fold bounds NODE cost (one table regardless of window count) but not BYTES: `rows` would stay
  * one entry per window, leaving serialized size O(Σ Sᵢ) with no gate and `rows.length` unbounded
  * against the host's `MAX_ARRAY = 500`. Measured against this builder (16 accounts, both history
- * rings full, an error callout): base view ≈ 36 448 B and a worst-case row ≈ 108 B, so 8 rows plus
- * the truncation row lands at ≈ 54 KB — 83 % of `MAX_BYTES`, with `rows.length ≤ 9`. The shape is
- * built by the grid's 16 × S=12 combination, so the arithmetic here cites an asserted case.
+ * rings full, an error callout): 8 rows plus the truncation row lands at 53 135 B — 81 % of
+ * `MAX_BYTES`, with `rows.length ≤ 9`. The shape is built by the grid's 16 × S=12 combination, so
+ * this figure cites an asserted case rather than an unbuilt calculation. Long model names eat that
+ * headroom: 32-character names take the same view to 57 023 B (87 %).
  */
 const MAX_TABLE_ROWS = 8;
 
@@ -650,19 +653,22 @@ function buildRestoreFailureCallout(rf: HealRestoreFailure): PluginUINode {
  * re-deriving the fold's overflow proof, not just this comment.
  *
  * `S` is externally driven — cswap emits one weekly window per model with a per-model limit — so
- * this stays derived from the form rather than a fixed account threshold. The estimate is
- * deliberately CONSERVATIVE: it charges 2 nodes per window while a folded account costs 2 in total,
- * so it over-charges and can only fold spend earlier than strictly necessary, never later.
+ * this stays derived from the form rather than a fixed account threshold.
  */
 const RICH_NODE_BUDGET = 220;
 
 /** Does the rich spend rendering fit? `S` is the largest scoped-window count among the accounts
  *  that are actually RENDERED — beyond `MAX_DETAILED_ACCOUNTS` the surplus collapses into a single
- *  "+N more accounts" node and costs nothing per window, so counting those would under-render. */
+ *  "+N more accounts" node and costs nothing per window, so counting those would under-render.
+ *
+ *  The scoped-window term matches `perAccount(S)`: `+2` for any account carrying at least one
+ *  window, whether that is a meter+gauge pair or a table+worst-window-gauge pair. It used to charge
+ *  `2S`, which was accurate before the fold and a large over-estimate after it — 8 accounts × 8
+ *  windows estimated 248 and suppressed the spend widgets on a view that is really 146 nodes. */
 function useRichSpend(pool: PoolAccount[]): boolean {
   const rendered = pool.slice(0, MAX_DETAILED_ACCOUNTS);
   const s = rendered.reduce((max, a) => Math.max(max, a.scopedWindows.length), 0);
-  return rendered.length * (15 + 2 * s) <= RICH_NODE_BUDGET;
+  return rendered.length * (15 + (s >= 1 ? 2 : 0)) <= RICH_NODE_BUDGET;
 }
 
 /** Build a `settings-panel` PluginUIView with the same data as buildStatus. */
@@ -698,11 +704,8 @@ export function buildUIView(
   });
 
   // Spend renders as its own meter+gauge when the pool's estimated node cost leaves room, and
-  // folds into the identity label otherwise. See `useRichSpend` for why this is derived rather
-  // than a fixed account threshold — and note the estimate is now deliberately CONSERVATIVE: it
-  // charges 2 nodes per scoped window, while an account with >= 2 windows actually costs 2 in
-  // total (one table + one worst-window gauge). It over-charges, never under-charges, so it can
-  // only fold spend earlier than strictly necessary.
+  // folds into the identity label otherwise. See `useRichSpend` for why this is derived from the
+  // closed form rather than a fixed account threshold.
   const richSpend = useRichSpend(pool);
 
   // ── Pool section ──────────────────────────────────────────────────────────

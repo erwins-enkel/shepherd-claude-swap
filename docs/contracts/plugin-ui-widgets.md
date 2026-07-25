@@ -84,14 +84,14 @@ re-deriving this proof, not just editing this paragraph.
 | `MAX_NODES` (256)    | `<= 253` as above. Sampled grid maxima: 251 (BASE 10) overall and on the folded path; the ceiling fixture pins 253 (BASE 12, 17 accounts × `S = 1`, both callouts) and 252 for the same shape at `N = 16`. |
 | `MAX_ARRAY` (500)    | `CHART_WINDOW = 60`, `SPAWN_RING_CAP = 50`, `MAX_DETAILED_ACCOUNTS = 16`, folded table `rows <= MAX_TABLE_ROWS + 1 = 9`.                                                                                   |
 | `MAX_DEPTH` (16)     | fixed by tree shape.                                                                                                                                                                                       |
-| `MAX_BYTES` (64 KiB) | worst folded view ~54 000 B (83 %) — 16 accounts × 9 rows plus 16 worst-window gauges, built by the grid's 16 × `S = 12` combination. Asserted as a bound with headroom, not an equality.                  |
+| `MAX_BYTES` (64 KiB) | worst folded view **53 135 B (81 %)** — 16 accounts × 9 rows plus 16 worst-window gauges, built by the grid's 16 × `S = 12` combination. Asserted as a bound with headroom, not an equality.               |
 
 **`MAX_BYTES` residual.** It is not closed by construction: several interpolated strings are
 cswap/operator-supplied and unbounded in length — `email`, `alias` and `organizationName` in the
 identity badge (pre-existing), and **`ScopedWindow.name`**, which the folded table's `model` cell
 interpolates verbatim. `MAX_TABLE_ROWS` bounds the row _count_, not the row _bytes_. The figures
-above use short model names (6–7 chars, ~106 B/row); a 32-char name gives ~131 B/row (~91 %) and
-headroom runs out around a ~130-char name. The fold _reduces_ this exposure — `name` was previously
+above use short model names (6–7 chars); the same view with 32-character names measures
+**57 023 B (87 %)**, and headroom runs out around a ~130-char name. The fold _reduces_ this exposure — `name` was previously
 interpolated twice per window (meter and gauge labels) and is now interpolated once, at most 8
 times per account.
 

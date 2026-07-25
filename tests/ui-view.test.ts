@@ -2013,7 +2013,7 @@ describe("buildUIView — four-cap budget grid", () => {
     const v = buildUIView(cfg, pool, new Set(), baseState, null, "boom", fullHistory(pool));
     const bytes = Buffer.byteLength(JSON.stringify(v), "utf8");
     expect(bytes).toBeLessThanOrEqual(MAX_BYTES);
-    expect(bytes).toBeLessThan(60_000); // measured ~54 000 B (83% of MAX_BYTES)
+    expect(bytes).toBeLessThan(60_000); // measured 53 135 B (81% of MAX_BYTES)
     expect(treeStats(v.root).maxArrayLen).toBeLessThanOrEqual(MAX_ARRAY);
   });
 
@@ -2295,6 +2295,10 @@ describe("buildUIView — row cap and truncation ordering", () => {
   });
 
   it("a 32-character model name still fits inside MAX_BYTES at pool scale", () => {
+    // The documented byte residual: MAX_TABLE_ROWS bounds the row COUNT, not the row BYTES, and
+    // `ScopedWindow.name` is cswap-supplied and unbounded. Built on the same worst-case label shape
+    // as the folded byte corner (16 accounts x 12 windows, both history rings full, an error
+    // callout), so it is comparable with the figure the contract doc quotes for short names.
     const long = "x".repeat(32);
     const pool = poolWith(
       Array.from({ length: 16 }, () => 12),
@@ -2303,7 +2307,9 @@ describe("buildUIView — row cap and truncation ordering", () => {
       },
     );
     const v = buildUIView(cfg, pool, new Set(), baseState, null, "boom", fullHistory(pool));
-    expect(Buffer.byteLength(JSON.stringify(v), "utf8")).toBeLessThanOrEqual(MAX_BYTES);
+    const bytes = Buffer.byteLength(JSON.stringify(v), "utf8");
+    expect(bytes).toBeLessThanOrEqual(MAX_BYTES);
+    expect(bytes).toBeLessThan(62_000); // measured 57 023 B (87%) vs 53 135 B (81%) for short names
   });
 });
 

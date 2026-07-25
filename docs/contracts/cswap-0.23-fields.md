@@ -215,12 +215,13 @@ Node cost is a closed form in **accounts × scoped windows**; see
 fold into one table plus one worst-window gauge from two windows up (issue #56), so the per-account
 cost is uniform in `S` and the view is bounded at 253 of the host's 256 nodes.
 
-The rich/compact spend switch (`min(N,16) × (15 + 2S) ≤ 220`) is stated in terms of `S` rather than a
-fixed account threshold, because `S` is externally driven — cswap emits one weekly window per model
-with a per-model limit — so a constant sized at one `S` overclaims at another. Note it is no longer
-_derived from_ the node closed form: it charges 2 nodes per scoped window, while a folded account
-costs 2 in total. It is a deliberately **conservative over-estimate** — it over-charges, never
-under-charges, so it can only fold spend into the account label earlier than strictly necessary.
+The rich/compact spend switch (`min(N,16) × (15 + (S ≥ 1 ? 2 : 0)) ≤ 220`) is stated in terms of `S`
+rather than a fixed account threshold, because `S` is externally driven — cswap emits one weekly
+window per model with a per-model limit — so a constant sized at one `S` overclaims at another. Its
+scoped-window term tracks the node closed form exactly: `+2` for any account carrying at least one
+window. It previously charged `2S`, which was accurate before the fold and a large over-estimate
+after it — 8 accounts × 8 windows estimated 248 and suppressed the spend widgets on a view that is
+really 146 nodes.
 
 That same budget is load-bearing for the node bound: the rich path costs up to 17 nodes per account,
 which at 16 accounts would exceed `MAX_NODES`, and it is `RICH_NODE_BUDGET` that caps the account
