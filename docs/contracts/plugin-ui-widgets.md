@@ -67,14 +67,19 @@ no sparkline, and no scoped windows on either path).
 
 ```
 compact — perAccount <= 15, and MAX_DETAILED_ACCOUNTS caps the count  => Σ <= 16 × 15 = 240
-rich    — perAccount <= 17, which at 16 accounts would be 272. RICH_NODE_BUDGET prevents it,
-          capping a rich pool at R <= 12 with any scoped window (12 × 17 = 204) and R <= 14
-          without (14 × 15 = 210)                                     => Σ <= 210
+rich    — perAccount <= 17, which at 16 accounts would be 272. RICH_NODE_BUDGET prevents it:
+          `useRichSpend` sums the per-account term and admits the pool only if that sum fits,
+          so the branch is bounded by the budget itself                => Σ <= 220
+          (reached by a HETEROGENEOUS pool — 14 accounts, 5 windowed: 5 × 17 + 9 × 15 = 220.
+          The uniform columns are lower: 14 × 15 = 210 and 12 × 17 = 204.)
 ```
 
 so `total <= 240 + 12 + 1 = 253`. **The bound depends on `RICH_NODE_BUDGET`** — the binding
-`useRichSpend` sums the emitted per-account cost **exactly**, so a rich view costs at most
-`budget + BASE(12) + truncation(1)` and the bound holds only while `RICH_NODE_BUDGET <= 243`. At 244
+`useRichSpend` sums the per-account term as a **tight upper bound** on what the rich rendering
+emits — it never under-charges, and over-charges only where a row is cheaper than the nominal 15 (an
+active account, whose two action-buttons are suppressed; an account with no spend plan; a
+quota-unknown row). So a rich view costs at most `budget + BASE(12) + truncation(1)`, and the bound
+holds only while `RICH_NODE_BUDGET <= 243`. At 244
 the binding pool is **not** the uniform one: 17 accounts of which only two carry a window sum to
 exactly `14 × 15 + 2 × 17 = 244`, render rich and reach **257 (BASE 12)**, over the cap. Raising that
 budget means re-deriving this proof, not just editing this paragraph.

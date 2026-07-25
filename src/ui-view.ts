@@ -644,8 +644,9 @@ function buildRestoreFailureCallout(rf: HealRestoreFailure): PluginUINode {
  *
  *   compact — perAccount ≤ 15 and MAX_DETAILED_ACCOUNTS caps the count ⇒ Σ ≤ 16 × 15 = 240
  *   rich    — perAccount ≤ 17, which at 16 accounts would be 272; THIS BUDGET is what prevents it.
- *             `useRichSpend` sums the emitted per-account cost exactly, so a rich pool's rendered
- *             total is ≤ RICH_NODE_BUDGET by construction ⇒ Σ ≤ 220
+ *             `useRichSpend` sums a tight upper bound on the emitted per-account cost, so a rich
+ *             pool's rendered total is ≤ RICH_NODE_BUDGET by construction ⇒ Σ ≤ 220, reached by a
+ *             heterogeneous pool (14 accounts, 5 windowed: 5×17 + 9×15 = 220), not a uniform one
  *
  * so total ≤ 240 + 12 + 1 = 253, the compact branch binding. NOTE THE DEPENDENCY: that proof leans
  * on this constant. A rich view costs at most `budget + BASE(12) + truncation(1)`, so the bound holds
@@ -662,16 +663,18 @@ const RICH_NODE_BUDGET = 220;
  *  RENDERED — beyond `MAX_DETAILED_ACCOUNTS` the surplus collapses into a single "+N more accounts"
  *  node and costs nothing per window, so counting those would under-render.
  *
- *  This is EXACT, not an estimate: the term summed here (`15 + 2` when the account carries at least
- *  one scoped window, whether that is a meter+gauge pair or a table+worst-window-gauge pair) is
- *  precisely what the rich rendering emits per account. Two earlier forms were not:
+ *  The term summed here — `15 + 2` when the account carries at least one scoped window, whether
+ *  that is a meter+gauge pair or a table+worst-window-gauge pair — is a TIGHT UPPER BOUND on what
+ *  the rich rendering emits. It never under-charges; it over-charges only where a row is cheaper
+ *  than the nominal 15: an active account (both action-buttons suppressed), one with no spend plan
+ *  (no spend meter/gauge), or a quota-unknown row (10 nodes). Two earlier forms were far looser:
  *    - `2S` per window — accurate before the fold, a large over-estimate after it (8 accounts × 8
  *      windows estimated 248 and suppressed spend on a view that is really 146 nodes);
  *    - the pool-wide MAXIMUM window count charged to every account — which billed one account's
  *      single window to all of them (14 accounts, one windowed, estimated 238 against a real 222).
  *
- *  Being exact is what lets the caller's bound be stated directly: a rich pool's rendered total is
- *  at most `RICH_NODE_BUDGET` by construction. See that constant for the cap arithmetic. */
+ *  Bounding from above is what lets the caller's bound be stated directly: a rich pool's rendered
+ *  total is at most `RICH_NODE_BUDGET` by construction. See that constant for the cap arithmetic. */
 function useRichSpend(pool: PoolAccount[]): boolean {
   const rendered = pool.slice(0, MAX_DETAILED_ACCOUNTS);
   const cost = rendered.reduce((n, a) => n + 15 + (a.scopedWindows.length > 0 ? 2 : 0), 0);

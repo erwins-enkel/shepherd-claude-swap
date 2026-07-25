@@ -1446,7 +1446,8 @@ describe("buildUIView — spend", () => {
   });
 
   it("folds spend into the identity label when the pool is too large for widgets", () => {
-    // 16 accounts × 4 scoped windows: 16 × (15 + 8) = 368 > RICH_NODE_BUDGET.
+    // 16 accounts × 4 scoped windows. Folded, so the per-account term is a uniform +2:
+    // 16 × 17 = 272 > RICH_NODE_BUDGET.
     const big = Array.from({ length: 16 }, (_, i) =>
       makeAccount(i + 1, {
         active: false,
@@ -1993,9 +1994,11 @@ describe("buildUIView — four-cap budget grid", () => {
 
   it("the rich branch's own maximum is bounded by RICH_NODE_BUDGET, not by the account cap", () => {
     // The MAX_NODES proof leans on the shipped spend switch: a rich account costs up to 17, which
-    // at 16 accounts would be 272. These two corners pin the rich branch's own maximum (sigma 210
-    // and 204) — they do NOT detect a budget raise, since both stay rich and unchanged at any
-    // higher budget. The raise is caught by the 15-account guard below and by the caps sweep.
+    // at 16 accounts would be 272. These pin the branch's ceiling — and note the true maximum is
+    // reached by a HETEROGENEOUS pool, not by either uniform column: 14 accounts with 5 windowed
+    // sums to 5x17 + 9x15 = 220, exactly the budget. The uniform columns sit below it at 210 and
+    // 204. None of them detects a budget raise (all stay rich and unchanged at any higher budget);
+    // that is the dedicated guard's job below.
     const richNodes = (n: number, s: number) =>
       treeStats(
         buildUIView(
@@ -2008,8 +2011,16 @@ describe("buildUIView — four-cap budget grid", () => {
           fullHistory(gridPool(n, s)),
         ).root,
       ).nodeCount;
-    expect(richNodes(14, 0)).toBe(220); // sigma 210, the rich branch's true maximum
-    expect(richNodes(12, 1)).toBe(214); // sigma 204, its maximum with scoped windows present
+    expect(richNodes(14, 0)).toBe(220); // sigma 210 — maximum of the uniform zero-window column
+    expect(richNodes(12, 1)).toBe(214); // sigma 204 — maximum of the uniform windowed column
+    // The branch's actual maximum: sigma 220, the budget itself, only reachable heterogeneously.
+    const mixed = poolWith([
+      ...Array.from({ length: 5 }, () => 1),
+      ...Array.from({ length: 9 }, () => 0),
+    ]);
+    const mixedView = buildUIView(cfg, mixed, new Set(), baseState, null, null, fullHistory(mixed));
+    expect(widgetLabels(mixedView.root).some((l) => l.includes("· spend"))).toBe(true); // rich
+    expect(treeStats(mixedView.root).nodeCount).toBe(230); // BASE 10 + 220
   });
 
   it("the RICH_NODE_BUDGET <= 243 guard: the two binding pools must stay COMPACT", () => {
