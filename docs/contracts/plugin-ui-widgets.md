@@ -91,10 +91,14 @@ cswap/operator-supplied and unbounded in length — `email`, `alias` and `organi
 identity badge (pre-existing), and **`ScopedWindow.name`**, which the folded table's `model` cell
 interpolates verbatim. `MAX_TABLE_ROWS` bounds the row _count_, not the row _bytes_. The figures
 above use short model names (6–7 chars); the same view with 32-character names measures
-**57 023 B (87 %)**. At that corner the name is interpolated **144 times** — 8 rows × 16 accounts
-plus 16 worst-window gauge labels — so each extra character costs 144 B against 12 401 B of
-headroom, and the ceiling is a **~92-character name** (93 is the first length that exceeds
-`MAX_BYTES`, measured). The fold _reduces_ this exposure — `name` was previously
+**57 023 B (87 %)**.
+
+At the 16-account corner the name is interpolated **144 times** per view — 8 rows × 16 accounts plus
+16 worst-window gauge labels — so each extra character costs 144 B. That puts the ceiling at a
+**~92-character name**, measured: 93 is the first length that exceeds `MAX_BYTES`. Both views agree,
+each measured against its own headroom — from the short-name baseline, `65 536 − 53 135 = 12 401 B`
+buys 86 more characters on top of ~6; from the 32-character view, `65 536 − 57 023 = 8 513 B` buys 59
+more on top of ~33. The fold _reduces_ this exposure — `name` was previously
 interpolated twice per window (meter and gauge labels) and is now interpolated once, at most 8
 times per account.
 
