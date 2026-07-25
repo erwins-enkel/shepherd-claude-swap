@@ -1815,9 +1815,11 @@ describe("buildUIView — identity labels", () => {
 // claim pinned at a single S is an overclaim — which is exactly the flaw in the
 // shipped 40-account fixture below (it runs at S=0, the cheapest column).
 //
-// Every assertion in this block is at BASE 10: the grid passes null for both
-// error callouts and is swept ONCE. The BASE-12 maximum (253) belongs to the
-// ceiling fixture at the end of this block, the only place both callouts are set.
+// The grid SWEEP's node-count assertions are all at BASE 10 — it passes null
+// for both error callouts and is swept once. Individual fixtures below vary:
+// the byte-corner and rich-boundary checks pass `lastError` (BASE 11), and the
+// two ceiling fixtures set both callouts (BASE 12), which is where the 253/252
+// construction maxima are pinned.
 // ---------------------------------------------------------------------------
 
 const MAX_NODES = 256;
@@ -2296,20 +2298,24 @@ describe("buildUIView — row cap and truncation ordering", () => {
 
   it("a 32-character model name still fits inside MAX_BYTES at pool scale", () => {
     // The documented byte residual: MAX_TABLE_ROWS bounds the row COUNT, not the row BYTES, and
-    // `ScopedWindow.name` is cswap-supplied and unbounded. Built on the same worst-case label shape
-    // as the folded byte corner (16 accounts x 12 windows, both history rings full, an error
-    // callout), so it is comparable with the figure the contract doc quotes for short names.
+    // `ScopedWindow.name` is cswap-supplied and unbounded.
+    //
+    // Built from `gridPool` with ONLY the window names overridden, so this is the exact shape the
+    // folded byte corner above measures and the contract doc quotes. Built on `poolWith` this
+    // measures 46 659 B — 10 364 B lighter — because it carries no alias/organisation/usage-age and
+    // leaves the pace fields neutral on purpose, so the severity fixtures can set them. Comparing
+    // that against a figure quoted from the `gridPool` shape would be meaningless.
     const long = "x".repeat(32);
-    const pool = poolWith(
-      Array.from({ length: 16 }, () => 12),
-      {
-        window: (_, j) => ({ name: `${long}${j}` }),
-      },
-    );
+    const pool = gridPool(16, 12).map((a) => ({
+      ...a,
+      scopedWindows: a.scopedWindows.map((w, j) => ({ ...w, name: `${long}${j}` })),
+    }));
     const v = buildUIView(cfg, pool, new Set(), baseState, null, "boom", fullHistory(pool));
     const bytes = Buffer.byteLength(JSON.stringify(v), "utf8");
     expect(bytes).toBeLessThanOrEqual(MAX_BYTES);
-    expect(bytes).toBeLessThan(62_000); // measured 57 023 B (87%) vs 53 135 B (81%) for short names
+    // Measured 57 023 B (87%) against 53 135 B (81%) for the short names of the corner above, i.e.
+    // 144 B per extra character. A tight bound: ~5 KB of slack, not ~13 KB.
+    expect(bytes).toBeLessThan(58_500);
   });
 });
 
