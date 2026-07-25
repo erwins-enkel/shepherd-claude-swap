@@ -73,10 +73,11 @@ rich    — perAccount <= 17, which at 16 accounts would be 272. RICH_NODE_BUDGE
 ```
 
 so `total <= 240 + 12 + 1 = 253`. **The bound depends on `RICH_NODE_BUDGET`** — the binding
-constraint is `floor(budget / 17) <= 14`, so it holds only while `RICH_NODE_BUDGET <= 254`. At 255 a
-rich pool reaches 15 accounts and the view hits **267 (BASE 12)**, over the cap — the same pool is
-**265 at BASE 10**, which is what the grid sweep sees. Raising that budget means re-deriving this
-proof, not just editing this paragraph.
+`useRichSpend` sums the emitted per-account cost **exactly**, so a rich view costs at most
+`budget + BASE(12) + truncation(1)` and the bound holds only while `RICH_NODE_BUDGET <= 243`. At 244
+the binding pool is **not** the uniform one: 17 accounts of which only two carry a window sum to
+exactly `14 × 15 + 2 × 17 = 244`, render rich and reach **257 (BASE 12)**, over the cap. Raising that
+budget means re-deriving this proof, not just editing this paragraph.
 
 #### Validator caps, by binding corner
 
@@ -118,11 +119,12 @@ which is the shape the byte figure above is measured from. The grid is swept onc
 BASE-12 maximum belongs to the ceiling fixture.
 
 `N = 13` and `N = 15` are the compact sides of the two rich/compact switch boundaries (12 and 14
-being the rich sides), and `N = 15` is what guards the `RICH_NODE_BUDGET <= 254` bound: at 255 a
-15-account pool with any scoped window flips rich (`15 × 17 = 255`) and reaches **265 nodes at
-BASE 10** — the figure the sweep sees, and 267 at the BASE 12 the proof above quotes — which the
-sweep then fails on. Verified by temporarily raising the constant — four tests fail, including the
-named guard; before `N = 15` was in the grid, none did.
+being the rich sides). The `RICH_NODE_BUDGET <= 243` bound is guarded by a dedicated fixture rather
+than by the sweep, because the binding pool is **heterogeneous** and the sweep is uniform: 17
+accounts with only two windowed sum to exactly 244, so they flip rich at a budget of 244 and reach
+257 (BASE 12). The guard asserts both that pool and the uniform 15-account one stay compact.
+Verified by temporarily moving the constant: the guard passes at 243 and fails at 244, the exact
+derived boundary.
 
 ### Folded per-model rendering (issue #56, fixed)
 

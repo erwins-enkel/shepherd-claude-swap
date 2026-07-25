@@ -1908,9 +1908,9 @@ function fullHistory(pool: PoolAccount[]): History {
 
 describe("buildUIView — four-cap budget grid", () => {
   // 13 and 15 are the COMPACT sides of the two rich/compact switch boundaries (12 and 14 are the
-  // rich sides), and 15 is the account count that breaks if RICH_NODE_BUDGET is raised above 254:
-  // at 255 a 15-account pool with any scoped window flips rich (15 x 17 = 255) and reaches 265
-  // nodes, which the caps sweep below then fails on. Without 15 here that invariant is unguarded.
+  // rich sides). The RICH_NODE_BUDGET <= 243 bound is NOT guarded here — its binding pool is
+  // heterogeneous (17 accounts, two windowed) and this sweep is uniform — so it has its own fixture
+  // below; 15 x 1 is the uniform witness, which only breaks at a budget of 255.
   const ACCOUNTS = [1, 3, 8, 12, 13, 14, 15, 16, 17, 20, 40];
   // S = 12 is past MAX_TABLE_ROWS (8): it is the only column where a folded account emits the
   // truncation row, i.e. 9 rows — the shape the folded byte worst case is measured from. Without it
@@ -2012,16 +2012,27 @@ describe("buildUIView — four-cap budget grid", () => {
     expect(richNodes(12, 1)).toBe(214); // sigma 204, its maximum with scoped windows present
   });
 
-  it("15 accounts x 1 window must stay COMPACT — the RICH_NODE_BUDGET <= 254 guard", () => {
-    // The load-bearing invariant src/ui-view.ts and both contract docs call out. A rich account
-    // costs 17 nodes, so the rich branch is only safe while the budget admits at most 14 of them:
-    // floor(220 / 17) = 12 today. At 255 this pool flips rich (15 x 17 = 255 <= 255) and reaches
-    // 265 nodes, over MAX_NODES. Asserting COMPACT here names the invariant at its exact boundary
-    // instead of leaving it to the sweep to notice.
-    const pool = gridPool(15, 1);
-    const v = buildUIView(cfg, pool, new Set(), baseState, null, null, fullHistory(pool));
-    expect(widgetLabels(v.root).some((l) => l.includes("· spend"))).toBe(false);
-    expect(treeStats(v.root).nodeCount).toBe(235);
+  it("the RICH_NODE_BUDGET <= 243 guard: the two binding pools must stay COMPACT", () => {
+    // The load-bearing invariant src/ui-view.ts and both contract docs call out. `useRichSpend` sums
+    // the emitted per-account cost exactly, so a rich view costs at most `budget + BASE(12) +
+    // truncation(1)`; the bound holds only while the budget is <= 243.
+    //
+    // Two witnesses, because the binding pool is NOT the uniform one:
+    //   - 17 accounts with only TWO windowed: 14x15 + 2x17 = 244. This is the tightest — it goes
+    //     rich the moment the budget reaches 244 and then costs 244 + 12 + 1 = 257.
+    //   - 15 accounts all windowed: 15x17 = 255, the uniform witness, which needs 255.
+    // Asserting COMPACT names the invariant at its boundary rather than leaving it to the sweep,
+    // which sweeps uniform pools only and would miss the first of these entirely.
+    const tightest = poolWith([1, 1, ...Array.from({ length: 15 }, () => 0)]);
+    const uniform = gridPool(15, 1);
+    for (const pool of [tightest, uniform]) {
+      const v = buildUIView(cfg, pool, new Set(), baseState, null, null, fullHistory(pool));
+      expect(widgetLabels(v.root).some((l) => l.includes("· spend"))).toBe(false);
+      expect(treeStats(v.root).nodeCount).toBeLessThanOrEqual(MAX_NODES);
+    }
+    expect(
+      treeStats(buildUIView(cfg, uniform, new Set(), baseState, null, null).root).nodeCount,
+    ).toBe(235);
   });
 
   it("folded byte corner: 16 accounts x 12 windows (9 rows each) stays under MAX_BYTES", () => {

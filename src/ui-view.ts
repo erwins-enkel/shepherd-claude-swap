@@ -643,32 +643,39 @@ function buildRestoreFailureCallout(rf: HealRestoreFailure): PluginUINode {
  * least one window cost the same +2, so the host's MAX_NODES = 256 cannot be exceeded:
  *
  *   compact — perAccount ≤ 15 and MAX_DETAILED_ACCOUNTS caps the count ⇒ Σ ≤ 16 × 15 = 240
- *   rich    — perAccount ≤ 17, which at 16 accounts would be 272; THIS BUDGET is what prevents it,
- *             capping a rich pool at R ≤ 12 with any scoped window (12 × 17 = 204) and R ≤ 14
- *             without (14 × 15 = 210) ⇒ Σ ≤ 210
+ *   rich    — perAccount ≤ 17, which at 16 accounts would be 272; THIS BUDGET is what prevents it.
+ *             `useRichSpend` sums the emitted per-account cost exactly, so a rich pool's rendered
+ *             total is ≤ RICH_NODE_BUDGET by construction ⇒ Σ ≤ 220
  *
- * so total ≤ 240 + 12 + 1 = 253. NOTE THE DEPENDENCY: that proof leans on this constant. The binding
- * constraint is ⌊budget / 17⌋ ≤ 14, i.e. the bound holds only while RICH_NODE_BUDGET ≤ 254 — at 255
- * a rich pool reaches 15 accounts and the view hits 267, over the cap. Raising this budget means
- * re-deriving the fold's overflow proof, not just this comment.
+ * so total ≤ 240 + 12 + 1 = 253, the compact branch binding. NOTE THE DEPENDENCY: that proof leans
+ * on this constant. A rich view costs at most `budget + BASE(12) + truncation(1)`, so the bound holds
+ * only while RICH_NODE_BUDGET ≤ 243 — at 244 a 17-account pool with two windowed accounts sums to
+ * exactly 244, renders rich and reaches 257, over the cap. Raising this budget means re-deriving the
+ * fold's overflow proof, not just this comment.
  *
  * `S` is externally driven — cswap emits one weekly window per model with a per-model limit — so
  * this stays derived from the form rather than a fixed account threshold.
  */
 const RICH_NODE_BUDGET = 220;
 
-/** Does the rich spend rendering fit? `S` is the largest scoped-window count among the accounts
- *  that are actually RENDERED — beyond `MAX_DETAILED_ACCOUNTS` the surplus collapses into a single
- *  "+N more accounts" node and costs nothing per window, so counting those would under-render.
+/** Does the rich spend rendering fit? Sums `perAccount` over the accounts that are actually
+ *  RENDERED — beyond `MAX_DETAILED_ACCOUNTS` the surplus collapses into a single "+N more accounts"
+ *  node and costs nothing per window, so counting those would under-render.
  *
- *  The scoped-window term matches `perAccount(S)`: `+2` for any account carrying at least one
- *  window, whether that is a meter+gauge pair or a table+worst-window-gauge pair. It used to charge
- *  `2S`, which was accurate before the fold and a large over-estimate after it — 8 accounts × 8
- *  windows estimated 248 and suppressed the spend widgets on a view that is really 146 nodes. */
+ *  This is EXACT, not an estimate: the term summed here (`15 + 2` when the account carries at least
+ *  one scoped window, whether that is a meter+gauge pair or a table+worst-window-gauge pair) is
+ *  precisely what the rich rendering emits per account. Two earlier forms were not:
+ *    - `2S` per window — accurate before the fold, a large over-estimate after it (8 accounts × 8
+ *      windows estimated 248 and suppressed spend on a view that is really 146 nodes);
+ *    - the pool-wide MAXIMUM window count charged to every account — which billed one account's
+ *      single window to all of them (14 accounts, one windowed, estimated 238 against a real 222).
+ *
+ *  Being exact is what lets the caller's bound be stated directly: a rich pool's rendered total is
+ *  at most `RICH_NODE_BUDGET` by construction. See that constant for the cap arithmetic. */
 function useRichSpend(pool: PoolAccount[]): boolean {
   const rendered = pool.slice(0, MAX_DETAILED_ACCOUNTS);
-  const s = rendered.reduce((max, a) => Math.max(max, a.scopedWindows.length), 0);
-  return rendered.length * (15 + (s >= 1 ? 2 : 0)) <= RICH_NODE_BUDGET;
+  const cost = rendered.reduce((n, a) => n + 15 + (a.scopedWindows.length > 0 ? 2 : 0), 0);
+  return cost <= RICH_NODE_BUDGET;
 }
 
 /** Build a `settings-panel` PluginUIView with the same data as buildStatus. */

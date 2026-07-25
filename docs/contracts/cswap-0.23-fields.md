@@ -225,4 +225,5 @@ really 146 nodes.
 
 That same budget is load-bearing for the node bound: the rich path costs up to 17 nodes per account,
 which at 16 accounts would exceed `MAX_NODES`, and it is `RICH_NODE_BUDGET` that caps the account
-count instead. The bound holds only while `RICH_NODE_BUDGET ≤ 254`.
+count instead. Because the switch sums the emitted per-account cost exactly, a rich view costs at
+most `budget + BASE + truncation`, so the bound holds only while `RICH_NODE_BUDGET ≤ 243`.
