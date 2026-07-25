@@ -1,11 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import { buildUIView } from "../src/ui-view";
 import type { PluginUINode } from "../types";
-import type { PoolAccount, SpendInfo } from "../src/accounts";
+import type { PoolAccount, ScopedWindow, SpendInfo } from "../src/accounts";
 import type { SelectionState } from "../src/selection";
 import type { LastSpawn } from "../src/status";
 import type { HealRecord, HealRestoreFailure } from "../src/prewarm";
 import { parseConfig } from "../src/config";
+import type { ResolvedConfig } from "../src/config";
 import {
   History,
   CHART_WINDOW,
@@ -1801,14 +1802,22 @@ describe("buildUIView — identity labels", () => {
 // The host drops the ENTIRE view if any of four caps is exceeded, and the node
 // count is a closed form in BOTH dimensions:
 //
-//   nodes(N, S) = BASE + min(N,16) × (perAccount + 2S) + (N > 16 ? 1 : 0)
-//   perAccount = 13 compact | 15 rich (spend meter + gauge)
+//   nodes(N, S) = BASE + Σ over min(N,16) accounts of perAccount(Sᵢ) + (N > 16 ? 1 : 0)
+//   perAccount(S) = (rich ? 15 : 13) + (S ≥ 1 ? 2 : 0)
+//     S = 1  → one meter (flat) + one gauge (graphics)
+//     S ≥ 2  → one table (flat) + one worst-window gauge (graphics)   [issue #56]
 //   BASE = 10. Last-spawn and last-heal always emit a node (placeholder when null), so they are
 //   already inside it; only the two error callouts vary, giving a worst-case BASE of 12.
 //
+// The per-account cost is UNIFORM in S — folding makes any account with at least
+// one scoped window cost the same +2 — so nothing here can exceed MAX_NODES.
 // `S` is externally driven (cswap emits one weekly window per model), so any
 // claim pinned at a single S is an overclaim — which is exactly the flaw in the
 // shipped 40-account fixture below (it runs at S=0, the cheapest column).
+//
+// Every assertion in this block is at BASE 10: the grid passes null for both
+// error callouts and is swept ONCE. The BASE-12 maximum (253) belongs to the
+// ceiling fixture at the end of this block, the only place both callouts are set.
 // ---------------------------------------------------------------------------
 
 const MAX_NODES = 256;
@@ -1841,6 +1850,42 @@ function gridPool(n: number, s: number): PoolAccount[] {
   );
 }
 
+/** One heterogeneous pool: account i carries `sList[i]` scoped windows. The SINGLE parametrized
+ *  builder for every non-uniform fixture below (mixed S, over-threshold placement, quota-unknown,
+ *  long names), so ~8 near-identical hand-rolled pools do not trip `fallow`'s duplicates rule.
+ *
+ *  `active: false` is load-bearing, exactly as in `gridPool`: `makeAccount` defaults it to true,
+ *  which suppresses BOTH action-buttons (`canMakePrimary` needs `!active`; `rotationButtonFor`
+ *  returns null for the active account), costing 2 nodes per account and breaking every exact
+ *  node-count equality here. */
+function poolWith(
+  sList: number[],
+  opts: {
+    window?: (accountIndex: number, j: number) => Partial<ScopedWindow>;
+  } & Partial<PoolAccount> = {},
+): PoolAccount[] {
+  const { window, ...acctOpts } = opts;
+  return sList.map((s, i) =>
+    makeAccount(i + 1, {
+      active: false,
+      fiveHourPct: 50,
+      sevenDayPct: 60,
+      spend: SPEND,
+      scopedWindows: Array.from({ length: s }, (_, j) => ({
+        name: `Model${j}`,
+        pct: 10,
+        resetsAt: null,
+        resetClock: "Jul 29 08:59",
+        resetCountdown: "4d 10h",
+        expectedPct: null,
+        aheadOfPace: false,
+        ...(window ? window(i, j) : {}),
+      })),
+      ...acctOpts,
+    }),
+  );
+}
+
 /** History filled to its retention caps — that is what populates the charts. */
 function fullHistory(pool: PoolAccount[]): History {
   const h = new History();
@@ -1861,13 +1906,18 @@ function fullHistory(pool: PoolAccount[]): History {
 
 describe("buildUIView — four-cap budget grid", () => {
   const ACCOUNTS = [1, 3, 8, 12, 14, 16, 17, 20, 40];
-  const WINDOWS = [0, 1, 2, 3, 4, 6, 8];
+  // S = 12 is past MAX_TABLE_ROWS (8): it is the only column where a folded account emits the
+  // truncation row, i.e. 9 rows — the shape the folded byte worst case is measured from. Without it
+  // the grid tops out at exactly 8 rows and never exercises the row cap at pool scale.
+  const WINDOWS = [0, 1, 2, 3, 4, 6, 8, 12];
 
-  /** Predicted node count; the closed form the rich/compact switch is derived from. */
+  /** Predicted node count; the closed form the rich/compact switch is derived from.
+   *  The scoped-window term is UNIFORM: +2 for any account with at least one window, whether that
+   *  is a meter+gauge pair (S = 1) or a table+worst-window-gauge pair (S >= 2). */
   const BASE_NODES = 10; // no error callouts present; each of the two would add one
   const predict = (n: number, s: number, rich: boolean): number =>
     BASE_NODES +
-    Math.min(n, MAX_DETAILED_ACCOUNTS) * ((rich ? 15 : 13) + 2 * s) +
+    Math.min(n, MAX_DETAILED_ACCOUNTS) * ((rich ? 15 : 13) + (s >= 1 ? 2 : 0)) +
     (n > MAX_DETAILED_ACCOUNTS ? 1 : 0);
 
   it("node count matches the closed form for every combination", () => {
@@ -1885,12 +1935,13 @@ describe("buildUIView — four-cap budget grid", () => {
     }
   });
 
-  it("every combination the switch admits to the rich path stays inside all four caps", () => {
+  it("EVERY combination stays inside all four caps", () => {
+    // Was gated on `if (!rich) continue`, which skipped the compact path entirely — and hid that
+    // 16 x 8 exceeded MAX_BYTES on the pre-fold builder. Every combination is checked now.
     for (const n of ACCOUNTS) {
       for (const s of WINDOWS) {
         const pool = gridPool(n, s);
         const v = buildUIView(cfg, pool, new Set(), baseState, null, null, fullHistory(pool));
-        if (!widgetLabels(v.root).some((l) => l.includes("· spend"))) continue; // compact path
         const stats = treeStats(v.root);
         expect({ n, s, over: stats.nodeCount > MAX_NODES }).toEqual({ n, s, over: false });
         expect(stats.maxArrayLen).toBeLessThanOrEqual(MAX_ARRAY);
@@ -1900,30 +1951,10 @@ describe("buildUIView — four-cap budget grid", () => {
     }
   });
 
-  it("no over-cap combination is caused by the spend rendering", () => {
-    // The load-bearing claim: every combination that blows the cap would ALSO blow it on the
-    // compact path, i.e. it is caused by the pre-existing per-scoped-window meter+gauge, not by
-    // anything added here. Asserted as a property rather than a pasted list, so it cannot be
-    // satisfied by simply copying whatever the code currently produces.
-    const compactNodes = (n: number, s: number): number =>
-      12 + Math.min(n, MAX_DETAILED_ACCOUNTS) * (13 + 2 * s) + (n > MAX_DETAILED_ACCOUNTS ? 1 : 0);
-
-    const causedByUs: string[] = [];
-    for (const n of ACCOUNTS) {
-      for (const s of WINDOWS) {
-        const pool = gridPool(n, s);
-        const v = buildUIView(cfg, pool, new Set(), baseState, null, null, fullHistory(pool));
-        if (treeStats(v.root).nodeCount > MAX_NODES && compactNodes(n, s) <= MAX_NODES) {
-          causedByUs.push(`${n}x${s}`);
-        }
-      }
-    }
-    expect(causedByUs).toEqual([]);
-  });
-
-  it("over-cap combinations are exactly the known pre-existing set, so a new one fails here", () => {
-    // Tracked as a follow-up: >=2 scoped weekly windows blows the cap well below the 16-account
-    // truncation limit. Pinned explicitly so a newly introduced overflow cannot blend in.
+  it("no combination is over cap — the list a regression would re-populate", () => {
+    // Was pinned to the pre-existing >=2-scoped-window overflow set with a "tracked as a follow-up"
+    // comment. That overflow is fixed (issue #56): folding makes the per-account cost uniform in S,
+    // so the list is empty and any regression re-populates it.
     const over: string[] = [];
     for (const n of ACCOUNTS) {
       for (const s of WINDOWS) {
@@ -1932,45 +1963,90 @@ describe("buildUIView — four-cap budget grid", () => {
         if (treeStats(v.root).nodeCount > MAX_NODES) over.push(`${n}x${s}`);
       }
     }
-    expect(over).toEqual([
-      "12x4",
-      "12x6",
-      "12x8",
-      "14x3",
-      "14x4",
-      "14x6",
-      "14x8",
-      "16x2",
-      "16x3",
-      "16x4",
-      "16x6",
-      "16x8",
-      "17x2",
-      "17x3",
-      "17x4",
-      "17x6",
-      "17x8",
-      "20x2",
-      "20x3",
-      "20x4",
-      "20x6",
-      "20x8",
-      "40x2",
-      "40x3",
-      "40x4",
-      "40x6",
-      "40x8",
-    ]);
+    expect(over).toEqual([]);
   });
 
-  it("compact worst case (17 accounts, worst-case labels) stays inside all four caps", () => {
-    const pool = gridPool(17, 1);
+  it("grid maxima are exactly 251 overall and 251 on the folded path (BASE 10)", () => {
+    // Sampled GRID maxima, not global bounds: the construction maximum (253 at BASE 12) is pinned
+    // by the ceiling fixture below. Folded and overall coincide because the worst-window gauge
+    // makes a folded account cost the same 15 as any other.
+    let max = 0;
+    let foldedMax = 0;
+    for (const n of ACCOUNTS) {
+      for (const s of WINDOWS) {
+        const pool = gridPool(n, s);
+        const nodes = treeStats(
+          buildUIView(cfg, pool, new Set(), baseState, null, null, fullHistory(pool)).root,
+        ).nodeCount;
+        max = Math.max(max, nodes);
+        if (s >= 2) foldedMax = Math.max(foldedMax, nodes);
+      }
+    }
+    expect({ max, foldedMax }).toEqual({ max: 251, foldedMax: 251 });
+  });
+
+  it("the rich branch's own maximum is bounded by RICH_NODE_BUDGET, not by the account cap", () => {
+    // The MAX_NODES proof leans on the shipped spend switch: a rich account costs up to 17, which
+    // at 16 accounts would be 272. These two corners are where that gate actually binds, so a
+    // budget bump admitting a 15th rich account fails here rather than silently re-opening the cap.
+    const richNodes = (n: number, s: number) =>
+      treeStats(
+        buildUIView(
+          cfg,
+          gridPool(n, s),
+          new Set(),
+          baseState,
+          null,
+          null,
+          fullHistory(gridPool(n, s)),
+        ).root,
+      ).nodeCount;
+    expect(richNodes(14, 0)).toBe(220); // sigma 210, the rich branch's true maximum
+    expect(richNodes(12, 1)).toBe(214); // sigma 204, its maximum with scoped windows present
+  });
+
+  it("folded byte corner: 16 accounts x 12 windows (9 rows each) stays under MAX_BYTES", () => {
+    // The row cap bounds bytes, and this is the shape it is measured from: 16 rendered accounts
+    // each emitting 8 window rows + the truncation row, plus 16 worst-window gauges. Asserted as a
+    // BOUND with headroom, not an equality — byte counts shift with any label or format tweak.
+    const pool = gridPool(16, 12);
     const v = buildUIView(cfg, pool, new Set(), baseState, null, "boom", fullHistory(pool));
+    const bytes = Buffer.byteLength(JSON.stringify(v), "utf8");
+    expect(bytes).toBeLessThanOrEqual(MAX_BYTES);
+    expect(bytes).toBeLessThan(60_000); // measured ~54 000 B (83% of MAX_BYTES)
+    expect(treeStats(v.root).maxArrayLen).toBeLessThanOrEqual(MAX_ARRAY);
+  });
+
+  it("construction ceiling: 17 accounts x S=1 with BOTH error callouts is exactly 253 nodes", () => {
+    // The construction maximum, and the ONLY place both callouts are set (BASE 12 = 10 + 2).
+    // Every S >= 1 is equally the corner — with the worst-window gauge any account carrying at
+    // least one scoped window costs the same +2 — so S = 0 is the cheap column and S = 1 is chosen
+    // here only because it is the smallest such shape. The 17th account is what adds the
+    // "+N more accounts" node; see the 16-account variant below for the same shape without it.
+    const pool = gridPool(17, 1);
+    const v = buildUIView(cfg, pool, new Set(), baseState, null, "boom", fullHistory(pool), null, {
+      at: "2026-07-25T10:00:00.000Z",
+      intendedActive: 1,
+      landedActive: 2,
+    });
     const stats = treeStats(v.root);
+    expect(stats.nodeCount).toBe(253);
     expect(stats.nodeCount).toBeLessThanOrEqual(MAX_NODES);
     expect(stats.maxArrayLen).toBeLessThanOrEqual(MAX_ARRAY);
     expect(stats.depth).toBeLessThanOrEqual(MAX_DEPTH);
     expect(Buffer.byteLength(JSON.stringify(v), "utf8")).toBeLessThanOrEqual(MAX_BYTES);
+  });
+
+  it("a 16-account pool of the same shape is 252 — no '+N more accounts' node", () => {
+    // Separate fixture, NOT the 17-account pool truncated: at N = 16 nothing is collapsed, so the
+    // truncation node is absent and the count is one lower.
+    const pool = gridPool(16, 1);
+    const v = buildUIView(cfg, pool, new Set(), baseState, null, "boom", fullHistory(pool), null, {
+      at: "2026-07-25T10:00:00.000Z",
+      intendedActive: 1,
+      landedActive: 2,
+    });
+    expect(treeStats(v.root).nodeCount).toBe(252);
   });
 
   it("rich boundary (8 accounts, 4 windows) stays inside all four caps", () => {
@@ -1982,5 +2058,308 @@ describe("buildUIView — four-cap budget grid", () => {
     expect(stats.maxArrayLen).toBeLessThanOrEqual(MAX_ARRAY);
     expect(stats.depth).toBeLessThanOrEqual(MAX_DEPTH);
     expect(Buffer.byteLength(JSON.stringify(v), "utf8")).toBeLessThanOrEqual(MAX_BYTES);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Folded scoped-window rendering (issue #56)
+//
+// From two scoped windows up, an account's per-model windows collapse into ONE
+// table in the flat pool section plus ONE worst-window gauge in the graphics
+// section. Both rank by the same `worstFirst` key (tone severity, then pct,
+// then cswap order), which is what guarantees the gauged window always has a
+// row explaining it.
+// ---------------------------------------------------------------------------
+
+/** The scoped-window table of the first account that has one. */
+function scopedTable(root: PluginUINode): PluginUINode | undefined {
+  return findByType(root, "table").find((t) =>
+    (t.props?.["columns"] as string[] | undefined)?.includes("model"),
+  );
+}
+
+/** Rows of the scoped-window table, as raw cell arrays. */
+function scopedRows(root: PluginUINode): string[][] {
+  return (scopedTable(root)?.props?.["rows"] as string[][] | undefined) ?? [];
+}
+
+/** Scoped meters/gauges — everything except the 5h/7d/spend/trend widgets. */
+function scopedWidgets(root: PluginUINode): PluginUINode[] {
+  return [...findByType(root, "meter"), ...findByType(root, "gauge")].filter((n) =>
+    String(n.props?.["label"] ?? "").includes(" wk"),
+  );
+}
+
+describe("buildUIView — folded scoped windows", () => {
+  const win = (over: Partial<ScopedWindow>): Partial<ScopedWindow> => over;
+
+  it("one window renders a meter and a gauge, and no table", () => {
+    const v = buildUIView(cfg, poolWith([1]), new Set(), baseState, null, null);
+    expect(scopedTable(v.root)).toBeUndefined();
+    expect(
+      scopedWidgets(v.root)
+        .map((n) => n.type)
+        .sort(),
+    ).toEqual(["gauge", "meter"]);
+  });
+
+  it("two windows fold: one table in the flat section, one gauge in the graphics section", () => {
+    const v = buildUIView(cfg, poolWith([2]), new Set(), baseState, null, null);
+    expect(findByType(v.root, "table").length).toBe(1);
+    const widgets = scopedWidgets(v.root);
+    expect(widgets.map((n) => n.type)).toEqual(["gauge"]); // no scoped meter survives the fold
+    expect(scopedRows(v.root).length).toBe(2);
+  });
+
+  it("a quota-unknown account emits neither scoped widgets nor a table", () => {
+    const v = buildUIView(
+      cfg,
+      poolWith([4], { usageUnavailable: true, fiveHourPct: null, sevenDayPct: null, spend: null }),
+      new Set(),
+      baseState,
+      null,
+      null,
+    );
+    expect(scopedTable(v.root)).toBeUndefined();
+    expect(scopedWidgets(v.root)).toEqual([]);
+  });
+
+  it("cells: pct, reset instant, composed note, and empty cells where nothing applies", () => {
+    const pool = poolWith([3], {
+      window: (_, j) =>
+        [
+          // pace-only (60 < 80), both conditions (96 >= 80), and neither.
+          win({ name: "Fable", pct: 60, expectedPct: 45, aheadOfPace: true }),
+          win({ name: "Opus", pct: 96, expectedPct: 60, aheadOfPace: true }),
+          win({ name: "Haiku", pct: 4, resetClock: null, resetCountdown: null }),
+        ][j]!,
+    });
+    // cfgWith80Pct, not the default 100, so 96% is genuinely at/over the threshold.
+    const rows = scopedRows(buildUIView(cfgWith80Pct, pool, new Set(), baseState, null, null).root);
+    expect(rows).toEqual([
+      ["#1 · Fable wk", "60%", "Jul 29 08:59 (4d 10h)", "ahead of pace (expected 45%)"],
+      [
+        "#1 · Opus wk",
+        "96%",
+        "Jul 29 08:59 (4d 10h)",
+        "at/over rateLimitPct · ahead of pace (expected 60%)",
+      ],
+      // null clock ⇒ EMPTY resets cell (no "null", no placeholder); nothing applies ⇒ empty note
+      ["#1 · Haiku wk", "4%", "", ""],
+    ]);
+  });
+
+  it("a clock with no countdown renders the clock alone, without empty parens", () => {
+    const pool = poolWith([2], { window: () => win({ resetCountdown: null }) });
+    const rows = scopedRows(buildUIView(cfg, pool, new Set(), baseState, null, null).root);
+    expect(rows[0]?.[2]).toBe("Jul 29 08:59");
+  });
+});
+
+describe("buildUIView — worst-window gauge", () => {
+  /** The single scoped gauge of a folded account. */
+  const gauge = (pool: PoolAccount[], config: ResolvedConfig = cfg): PluginUINode | undefined =>
+    scopedWidgets(buildUIView(config, pool, new Set(), baseState, null, null).root).find(
+      (n) => n.type === "gauge",
+    );
+
+  it("selects the at/over-rateLimitPct window and tones it error", () => {
+    const pool = poolWith([3], {
+      window: (_, j) =>
+        [
+          { name: "A", pct: 50 },
+          { name: "B", pct: 95 },
+          { name: "C", pct: 60 },
+        ][j]!,
+    });
+    const g = gauge(pool, cfgWith80Pct); // 95% is over an 80% threshold, not over the default 100%
+    expect(g?.props?.["label"]).toBe("#1 · B wk");
+    expect(g?.props?.["tone"]).toBe("error");
+  });
+
+  it("prefers a LOWER-pct ahead-of-pace window over a higher-pct ok one, and tones it warn", () => {
+    // The case a max-pct rule would lose: the amber signal has no other carrier in the panel,
+    // since scoped-window severity never reaches the status badge.
+    const pool = poolWith([3], {
+      window: (_, j) =>
+        [
+          { name: "A", pct: 80 },
+          { name: "B", pct: 40, expectedPct: 20, aheadOfPace: true },
+          { name: "C", pct: 85 },
+        ][j]!,
+    });
+    const g = gauge(pool);
+    expect(g?.props?.["label"]).toBe("#1 · B wk");
+    expect(g?.props?.["tone"]).toBe("warn");
+  });
+
+  it("falls back to the highest pct when every window is ok", () => {
+    const pool = poolWith([3], {
+      window: (_, j) =>
+        [
+          { name: "A", pct: 10 },
+          { name: "B", pct: 70 },
+          { name: "C", pct: 30 },
+        ][j]!,
+    });
+    expect(gauge(pool)?.props?.["label"]).toBe("#1 · B wk");
+    expect(gauge(pool)?.props?.["tone"]).toBe("ok");
+  });
+
+  it("breaks a severity+pct tie by cswap emission order", () => {
+    const pool = poolWith([3], {
+      window: (_, j) =>
+        [
+          { name: "A", pct: 70 },
+          { name: "B", pct: 70 },
+          { name: "C", pct: 70 },
+        ][j]!,
+    });
+    expect(gauge(pool)?.props?.["label"]).toBe("#1 · A wk");
+  });
+});
+
+describe("buildUIView — row cap and truncation ordering", () => {
+  // The DEFAULT rateLimitPct is 100, so threshold cases run against cfgWith80Pct and use pcts
+  // that genuinely clear 80.
+  const OVER = 95;
+  /** Labels in the table's `model` column. */
+  const models = (root: PluginUINode): string[] => scopedRows(root).map((r) => r[0]!);
+  const gaugeLabel = (root: PluginUINode): string =>
+    String(scopedWidgets(root).find((n) => n.type === "gauge")?.props?.["label"] ?? "");
+
+  it("renders 8 window rows plus a full-width truncation row", () => {
+    const v = buildUIView(cfg, poolWith([24]), new Set(), baseState, null, null);
+    const rows = scopedRows(v.root);
+    expect(rows.length).toBe(9);
+    expect(rows[8]).toEqual(["+16 more windows", "", "", ""]);
+    // Every row matches the column count — a short row renders short in PuiTable.
+    const columns = scopedTable(v.root)?.props?.["columns"] as string[];
+    for (const row of rows) expect(row.length).toBe(columns.length);
+  });
+
+  it("retains an at/over-threshold window that sits LAST in cswap order", () => {
+    const pool = poolWith([12], { window: (_, j) => (j === 11 ? { pct: OVER } : { pct: 10 }) });
+    const v = buildUIView(cfgWith80Pct, pool, new Set(), baseState, null, null);
+    expect(models(v.root)).toContain("#1 · Model11 wk");
+    expect(models(v.root)).toContain(gaugeLabel(v.root)); // gauge always has a row
+  });
+
+  it("retains an AHEAD-OF-PACE window that sits last, and gauges it warn", () => {
+    // The tier a threshold-only partition would drop: 8 sub-threshold `ok` windows come first in
+    // cswap order, so a positional slice truncates the sole `warn` window away — leaving amber with
+    // no row, or no amber at all.
+    const pool = poolWith([12], {
+      window: (_, j) => (j === 11 ? { pct: 40, expectedPct: 20, aheadOfPace: true } : { pct: 10 }),
+    });
+    const v = buildUIView(cfg, pool, new Set(), baseState, null, null);
+    expect(models(v.root)).toContain("#1 · Model11 wk");
+    expect(gaugeLabel(v.root)).toBe("#1 · Model11 wk");
+    expect(scopedWidgets(v.root)[0]?.props?.["tone"]).toBe("warn");
+    expect(models(v.root)).toContain(gaugeLabel(v.root));
+  });
+
+  it("with more than 8 over-threshold windows, keeps the highest-pct one even if it is last", () => {
+    // Within-tier ordering: a cswap-order-only partition would truncate away the very window the
+    // gauge selects.
+    const pool = poolWith([12], {
+      window: (_, j) => ({ pct: j === 11 ? 99 : OVER }),
+    });
+    const v = buildUIView(cfgWith80Pct, pool, new Set(), baseState, null, null);
+    expect(models(v.root)).toContain("#1 · Model11 wk");
+    expect(gaugeLabel(v.root)).toBe("#1 · Model11 wk");
+    expect(models(v.root)).toContain(gaugeLabel(v.root));
+    for (const row of scopedRows(v.root).slice(0, 8)) {
+      expect(row[3]).toContain("at/over rateLimitPct");
+    }
+  });
+
+  it("displays retained rows in cswap emission order, not worst-first", () => {
+    // 10 windows, only the LAST over threshold. Retention ranks it first and keeps 7 of the `ok`
+    // ones (Model7/Model8 are dropped), but display order is cswap order — so Model9 reads last,
+    // not first. Asserted as the exact sequence: a self-sort comparison would pass even if the
+    // ordering were broken.
+    const pool = poolWith([10], { window: (_, j) => (j === 9 ? { pct: OVER } : { pct: 10 }) });
+    const v = buildUIView(cfgWith80Pct, pool, new Set(), baseState, null, null);
+    expect(models(v.root)).toEqual([
+      "#1 · Model0 wk",
+      "#1 · Model1 wk",
+      "#1 · Model2 wk",
+      "#1 · Model3 wk",
+      "#1 · Model4 wk",
+      "#1 · Model5 wk",
+      "#1 · Model6 wk",
+      "#1 · Model9 wk",
+      "+2 more windows",
+    ]);
+  });
+
+  it("a 32-character model name still fits inside MAX_BYTES at pool scale", () => {
+    const long = "x".repeat(32);
+    const pool = poolWith(
+      Array.from({ length: 16 }, () => 12),
+      {
+        window: (_, j) => ({ name: `${long}${j}` }),
+      },
+    );
+    const v = buildUIView(cfg, pool, new Set(), baseState, null, "boom", fullHistory(pool));
+    expect(Buffer.byteLength(JSON.stringify(v), "utf8")).toBeLessThanOrEqual(MAX_BYTES);
+  });
+});
+
+describe("buildUIView — heterogeneous pool", () => {
+  it("0, 1 and 4 windows in one pool each render their own way", () => {
+    const pool = poolWith([0, 1, 4]);
+    const v = buildUIView(cfg, pool, new Set(), baseState, null, null);
+    const labelled = (n: number) =>
+      scopedWidgets(v.root).filter((w) => String(w.props?.["label"]).startsWith(`#${n} `));
+    expect(labelled(1)).toEqual([]); // S = 0 — nothing at all
+    expect(
+      labelled(2)
+        .map((w) => w.type)
+        .sort(),
+    ).toEqual(["gauge", "meter"]); // S = 1 — both kept
+    expect(labelled(3).map((w) => w.type)).toEqual(["gauge"]); // S = 4 — folded to one gauge
+    expect(findByType(v.root, "table").length).toBe(1); // only the S = 4 account has a table
+    // Uniform closed form: BASE 10 + 15 (S=0) + 17 (S=1) + 17 (S=4), all rich.
+    expect(treeStats(v.root).nodeCount).toBe(10 + 15 + 17 + 17);
+  });
+});
+
+describe("weeklyCaption — byte-identical after the paceNote/resetInstant extractions", () => {
+  // The shipped caption assertions are `includes`-based and cannot detect a rewording, so pin both
+  // forms exactly through the rendered tree.
+  const sevenDayCaption = (
+    pace: { expectedPct: number | null; aheadOfPace: boolean },
+    reset: boolean,
+  ) => {
+    const v = buildUIView(
+      cfg,
+      [
+        makeAccount(1, {
+          sevenDayPct: 60,
+          sevenDayPace: pace,
+          sevenDayResetClock: reset ? "Jul 29 08:59" : null,
+          sevenDayResetCountdown: reset ? "4d 10h" : null,
+        }),
+      ],
+      new Set(),
+      baseState,
+      null,
+      null,
+    );
+    return captions(v.root).find((c) => c.startsWith("60%"));
+  };
+
+  it("renders the expected-pct form exactly", () => {
+    expect(sevenDayCaption({ expectedPct: 36.7, aheadOfPace: true }, true)).toBe(
+      "60% · resets Jul 29 08:59 (4d 10h) · ahead of pace (expected 36.7%)",
+    );
+  });
+
+  it("renders the bare ahead-of-pace form exactly when expectedPct is null", () => {
+    expect(sevenDayCaption({ expectedPct: null, aheadOfPace: true }, false)).toBe(
+      "60% · ahead of pace",
+    );
   });
 });
