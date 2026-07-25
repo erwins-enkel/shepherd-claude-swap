@@ -74,8 +74,9 @@ rich    — perAccount <= 17, which at 16 accounts would be 272. RICH_NODE_BUDGE
 
 so `total <= 240 + 12 + 1 = 253`. **The bound depends on `RICH_NODE_BUDGET`** — the binding
 constraint is `floor(budget / 17) <= 14`, so it holds only while `RICH_NODE_BUDGET <= 254`. At 255 a
-rich pool reaches 15 accounts and the view hits 267, over the cap. Raising that budget means
-re-deriving this proof, not just editing this paragraph.
+rich pool reaches 15 accounts and the view hits **267 (BASE 12)**, over the cap — the same pool is
+**265 at BASE 10**, which is what the grid sweep sees. Raising that budget means re-deriving this
+proof, not just editing this paragraph.
 
 #### Validator caps, by binding corner
 
@@ -118,7 +119,8 @@ BASE-12 maximum belongs to the ceiling fixture.
 
 `N = 13` and `N = 15` are the compact sides of the two rich/compact switch boundaries (12 and 14
 being the rich sides), and `N = 15` is what guards the `RICH_NODE_BUDGET <= 254` bound: at 255 a
-15-account pool with any scoped window flips rich (`15 × 17 = 255`) and reaches 265 nodes, which the
+15-account pool with any scoped window flips rich (`15 × 17 = 255`) and reaches **265 nodes at
+BASE 10** — the figure the sweep sees, and 267 at the BASE 12 the proof above quotes — which the
 sweep then fails on. Verified by temporarily raising the constant — four tests fail, including the
 named guard; before `N = 15` was in the grid, none did.
 
