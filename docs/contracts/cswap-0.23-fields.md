@@ -211,8 +211,23 @@ render, which is indistinguishable from a plugin bug without a documented floor.
 ## 7. UI node budget
 
 Node cost is a closed form in **accounts × scoped windows**; see
-[`plugin-ui-widgets.md`](plugin-ui-widgets.md) for the formula, the grid test and the pre-existing
-≥2-window overflow (issue #56). The rich/compact spend switch is derived from that form
-(`min(N,16) × (15 + 2S) ≤ 220`) rather than a fixed account threshold, because `S` is externally
-driven — cswap emits one weekly window per model with a per-model limit — so a constant sized at one
-`S` overclaims at another.
+[`plugin-ui-widgets.md`](plugin-ui-widgets.md) for the formula and the grid test. Per-model windows
+fold into one table plus one worst-window gauge from two windows up (issue #56), so the per-account
+cost is uniform in `S` and the view is bounded at 253 of the host's 256 nodes.
+
+The rich/compact spend switch (`Σ over min(N,16) accounts of (15 + (Sᵢ ≥ 1 ? 2 : 0)) ≤ 220`, a
+per-account sum rather than a product — only the sum describes the heterogeneous pools the bound
+below turns on) is stated in terms of `S` rather than a fixed account threshold, because `S` is
+externally driven — cswap emits one weekly
+window per model with a per-model limit — so a constant sized at one `S` overclaims at another. Its
+scoped-window term tracks the node closed form exactly: `+2` for any account carrying at least one
+window. It previously charged `2S`, which was accurate before the fold and a large over-estimate
+after it — 8 accounts × 8 windows estimated 248 and suppressed the spend widgets on a view that is
+really 146 nodes.
+
+That same budget is load-bearing for the node bound: the rich path costs up to 17 nodes per account,
+which at 16 accounts would exceed `MAX_NODES`, and it is `RICH_NODE_BUDGET` that caps the account
+count instead. Because that sum is a tight upper bound on what the rich rendering emits (it
+over-charges only for rows that are cheaper than nominal — an active account, one with no spend
+plan, a quota-unknown row), a rich view costs at most `budget + BASE + truncation`, so the bound
+holds only while `RICH_NODE_BUDGET ≤ 243`.
