@@ -353,6 +353,29 @@ const twoNonActiveList = {
   ],
 };
 
+/** Primary (#1) is rate-limited, so the pass-through tier cannot serve; #2 is healthy but only
+ *  reachable once warmed. Isolates the abort / warm paths from the pass-through fallback. */
+const rateLimitedPrimaryList = {
+  schemaVersion: 1,
+  activeAccountNumber: 1,
+  accounts: [
+    {
+      number: 1,
+      email: "acct1@example.com",
+      active: true,
+      usageStatus: "ok",
+      usage: { fiveHour: { pct: 0 }, sevenDay: { pct: 100 } },
+    },
+    {
+      number: 2,
+      email: "acct2@example.com",
+      active: false,
+      usageStatus: "ok",
+      usage: { fiveHour: { pct: 0 }, sevenDay: { pct: 0 } },
+    },
+  ],
+};
+
 describe("register — new-session assignment", () => {
   it("two fresh sessions get distinct accounts (round-robin) and pins are persisted", async () => {
     const { runner } = makeFakeRunner({ prewarmOk: true, listResult: twoNonActiveList });
@@ -459,8 +482,11 @@ describe("register — sticky resume (criterion 2)", () => {
 // ───────────────────────────────────────────────────────────────────────────
 
 describe("register — hard-block (criterion 3)", () => {
-  it("empty ready pool + abortOnEmpty → onSpawn throws (abortSpawn)", async () => {
-    const { runner } = makeFakeRunner({ prewarmOk: false }); // nothing becomes ready
+  // The pool must offer NO fallback at all: prewarms fail (nothing ready) AND the primary is
+  // rate-limited (pass-through tier declines). With a healthy primary these spawns are served by
+  // pass-through instead — covered in "register — pass-through onto the primary" below.
+  it("empty ready pool + unusable primary + abortOnEmpty → onSpawn throws (abortSpawn)", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: false, listResult: rateLimitedPrimaryList });
     const timers = makeFakeTimers();
     const fc = makeFakeCtx({ config: { abortOnEmpty: true } });
     await register(fc.ctx, {
@@ -473,8 +499,8 @@ describe("register — hard-block (criterion 3)", () => {
     expect(() => runHook(fc.getHook(), "fresh")).toThrow(PluginSpawnAborted);
   });
 
-  it("empty ready pool + abortOnEmpty=false → fail-open returns {}", async () => {
-    const { runner } = makeFakeRunner({ prewarmOk: false });
+  it("empty ready pool + unusable primary + abortOnEmpty=false → fail-open returns {}", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: false, listResult: rateLimitedPrimaryList });
     const timers = makeFakeTimers();
     const fc = makeFakeCtx({ config: { abortOnEmpty: false } });
     await register(fc.ctx, {
@@ -495,8 +521,10 @@ describe("register — hard-block (criterion 3)", () => {
 
 describe("register — warm resume", () => {
   it("pinned usable but not ready → throws warming abort AND schedules a background warm", async () => {
-    // all prewarms fail at boot → ready stays empty, accounts remain usable
-    const { runner, calls } = makeFakeRunner({ prewarmOk: false });
+    // all prewarms fail at boot → ready stays empty, accounts remain usable. The pin must be a
+    // NON-primary account: a pin that is the primary is served by pass-through instead (it can
+    // never be warmed), covered in "register — pass-through onto the primary" below.
+    const { runner, calls } = makeFakeRunner({ prewarmOk: false, listResult: twoNonActiveList });
     const timers = makeFakeTimers();
     const store = new Map<string, string>();
     store.set("assignments", JSON.stringify({ s1: 1 }));
@@ -2014,5 +2042,209 @@ describe("computeResetOrder", () => {
       poolAcct(4, { sevenDayResetsAt: at(2 * H), sevenDayPct: 95 }), // 7d band
     ];
     expect([...computeResetOrder(pool, NOW_MS, RATE_LIMIT).keys()].sort()).toEqual([1, 2]);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Pass-through onto the primary (last-resort fallback)
+//
+// The active account has no isolated session profile, so it can never be `ready`. Before this
+// tier, a pool whose only healthy account was the primary aborted every spawn. Pass-through
+// routes onto it by emitting NO credentialDir — the default `~/.claude` login IS that account.
+// ───────────────────────────────────────────────────────────────────────────
+
+/** Reported scenario: every non-primary account is over the limit, the primary is well under it. */
+const onlyPrimaryHealthyList = {
+  schemaVersion: 1,
+  activeAccountNumber: 1,
+  accounts: [
+    {
+      number: 1,
+      email: "acct1@example.com",
+      active: true,
+      usageStatus: "ok",
+      usage: { fiveHour: { pct: 12 }, sevenDay: { pct: 19 } },
+    },
+    {
+      number: 2,
+      email: "acct2@example.com",
+      active: false,
+      usageStatus: "ok",
+      usage: { fiveHour: { pct: 0 }, sevenDay: { pct: 98 } },
+    },
+    {
+      number: 3,
+      email: "acct3@example.com",
+      active: false,
+      usageStatus: "ok",
+      usage: { fiveHour: { pct: 97 }, sevenDay: { pct: 40 } },
+    },
+  ],
+};
+
+describe("register — pass-through onto the primary", () => {
+  /** Boot with only the primary healthy, under the reported `rateLimitPct: 95`. */
+  async function bootDrained(config: Record<string, unknown> = {}) {
+    const { runner } = makeFakeRunner({ prewarmOk: true, listResult: onlyPrimaryHealthyList });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx({ config: { rateLimitPct: 95, abortOnEmpty: true, ...config } });
+    const teardown = await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    return { fc, teardown };
+  }
+
+  it("spawns instead of halting when the primary is the last healthy account", async () => {
+    const { fc } = await bootDrained();
+    const patch = runHook(fc.getHook(), "s1") as SpawnPatch;
+    // No credentialDir injected → the spawn runs on the default login, i.e. account 1.
+    expect(patch).toEqual({});
+    expect(fc.abortReasons).toHaveLength(0);
+  });
+
+  it("pins the session to the primary and advances the cursor durably", async () => {
+    const { fc } = await bootDrained();
+    runHook(fc.getHook(), "s1");
+    const assignments = JSON.parse(fc.store.get("assignments")!) as Record<string, number>;
+    expect(assignments["s1"]).toBe(1);
+    expect(JSON.parse(fc.store.get("cursor")!)).toBe(1);
+  });
+
+  it("records lastSpawn with a NULL credentialDir — never a path that does not exist", async () => {
+    const { fc } = await bootDrained();
+    runHook(fc.getHook(), "s1");
+    const handler = fc.routes.get("GET stats")!;
+    const body = (await (await handler(new Request("http://x/stats"))).json()) as {
+      lastSpawn: { accountNumber: number; credentialDir: string | null } | null;
+    };
+    expect(body.lastSpawn?.accountNumber).toBe(1);
+    expect(body.lastSpawn?.credentialDir).toBeNull();
+  });
+
+  it("logs the pass-through so a degraded pool is visible to the operator", async () => {
+    const { fc } = await bootDrained();
+    runHook(fc.getHook(), "s1");
+    const logged = fc.logs.flat().filter((l): l is string => typeof l === "string");
+    expect(logged.some((l) => l.includes("pass-through") && l.includes("1"))).toBe(true);
+  });
+
+  it("still ABORTS when the primary is itself over the limit (fallback is not a bypass)", async () => {
+    // rateLimitPct 15 puts the primary's 19% 7-day window over the line too.
+    const { fc } = await bootDrained({ rateLimitPct: 15 });
+    expect(() => runHook(fc.getHook(), "s1")).toThrow(PluginSpawnAborted);
+  });
+
+  it("does NOT pass through while a switch is in flight (stale active account)", async () => {
+    // During a switch, refresh() is suppressed, so activeAccountNumber is stale and the real
+    // default login may be a different account. The fallback must fail closed, not guess.
+    let release: () => void = () => {};
+    const blockOn = new Promise<void>((r) => {
+      release = r;
+    });
+    const { runner } = makeFakeRunner({
+      prewarmOk: true,
+      listResult: onlyPrimaryHealthyList,
+      switchBlockOn: blockOn,
+    });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx({ config: { rateLimitPct: 95, abortOnEmpty: true } });
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+
+    // Sanity: pass-through works before the switch starts.
+    expect(runHook(fc.getHook(), "before")).toEqual({});
+
+    const inflight = fc.routes.get("POST switch-primary")!(
+      new Request("http://x/switch-primary", {
+        method: "POST",
+        body: JSON.stringify({ mode: "next" }),
+      }),
+    );
+    await Promise.resolve(); // let the handler reach the blocked cswap call
+
+    expect(() => runHook(fc.getHook(), "during-switch")).toThrow(PluginSpawnAborted);
+
+    release();
+    await inflight;
+  });
+
+  it("a ready non-primary account still wins — pass-through is strictly last resort", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true, listResult: twoNonActiveList });
+    const timers = makeFakeTimers();
+    const fc = makeFakeCtx();
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+    const patch = runHook(fc.getHook(), "s1") as SpawnPatch;
+    expect(patch.credentialDir).toBeTruthy();
+  });
+});
+
+describe("register — resume of a session pinned to the primary", () => {
+  it("resumes via pass-through instead of stalling on a warm that can never happen", async () => {
+    const { runner, calls } = makeFakeRunner({
+      prewarmOk: true,
+      listResult: onlyPrimaryHealthyList,
+    });
+    const timers = makeFakeTimers();
+    const store = new Map<string, string>();
+    store.set("assignments", JSON.stringify({ s1: 1 })); // pinned to what is now the primary
+    store.set("cursor", JSON.stringify(0));
+    const fc = makeFakeCtx({ store, config: { rateLimitPct: 95 } });
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+
+    const before = calls.length;
+    const patch = runHook(fc.getHook(), "s1") as SpawnPatch;
+
+    expect(patch).toEqual({});
+    expect(fc.abortReasons).toHaveLength(0);
+    // No futile background warm scheduled for the primary, and no I/O on the hot path.
+    expect(calls.length).toBe(before);
+    // The pin is preserved exactly — a resume is never re-pointed.
+    const assignments = JSON.parse(fc.store.get("assignments")!) as Record<string, number>;
+    expect(assignments["s1"]).toBe(1);
+  });
+
+  it("aux review inheriting a parent pinned to the primary falls open, not to a stale dir", async () => {
+    const { runner } = makeFakeRunner({ prewarmOk: true, listResult: onlyPrimaryHealthyList });
+    const timers = makeFakeTimers();
+    const store = new Map<string, string>();
+    store.set("assignments", JSON.stringify({ parent: 1 }));
+    store.set("cursor", JSON.stringify(0));
+    const fc = makeFakeCtx({ store, config: { rateLimitPct: 95 } });
+    await register(fc.ctx, {
+      runner,
+      setInterval: timers.setIntervalFn,
+      clearInterval: timers.clearIntervalFn,
+      now,
+      existsSync: () => true,
+    });
+
+    const patch = runHook(fc.getHook(), "review-id", {
+      kind: "review",
+      parentSessionId: "parent",
+    }) as SpawnPatch;
+
+    expect(patch).toEqual({});
+    expect(fc.abortReasons).toHaveLength(0);
   });
 });

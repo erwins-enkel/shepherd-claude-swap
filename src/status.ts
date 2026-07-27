@@ -6,7 +6,10 @@ import type { HealRecord, HealRestoreFailure } from "./prewarm";
 export interface LastSpawn {
   sessionId: string;
   accountNumber: number;
-  credentialDir: string;
+  /** Null for a PASS-THROUGH spawn onto the primary: that account has no isolated session profile,
+   *  so no dir was injected and the spawn ran on the default `~/.claude` login. Null rather than a
+   *  fabricated path — `GET stats` must not imply a dir that does not exist. */
+  credentialDir: string | null;
   at: string;
 }
 
