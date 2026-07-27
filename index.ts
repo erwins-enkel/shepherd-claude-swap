@@ -180,7 +180,9 @@ export function computeResetOrder(
  * is set (a host whose reviewer sandbox binds a plugin-patched credentialDir — shepherd#1217+).
  *
  * - `parentSessionId` present (review / plan-gate): inherit the parent session's pinned
- *   account. Falls open (`{}`) if the parent is untracked or its account is gone.
+ *   account. Falls open (`{}`) if the parent is untracked, its account is gone, or the pin IS the
+ *   primary (that account's isolated profile was moved into `~/.claude` by the switch, so a routed
+ *   dir would be absent or stale — pass-through lands on the same account, correctly).
  * - `parentSessionId` absent (doc / standalone critic): route to a pool account
  *   EPHEMERALLY — `assign` result is used for the credentialDir only; `nextState` is
  *   discarded (no cursor advance, no durable pin). Falls open if none eligible.
@@ -194,27 +196,28 @@ function auxSpawnPatch(
   backupRoot: string,
   strategy: Strategy,
   resetOrder: Map<number, number>,
+  primary: number | null,
 ): SpawnPatch | void {
   // review / plan-gate: keep the aux spawn on the parent session's account.
   if (d.parentSessionId !== undefined) {
     const pin = state.assignments[d.parentSessionId];
-    if (pin !== undefined) {
+    if (pin !== undefined && pin !== primary) {
       const acct = pool.find((a) => a.number === pin);
       if (acct !== undefined) {
         return { credentialDir: sessionProfileDir(backupRoot, pin, acct.email) };
       }
     }
-    return {}; // parent untracked / gone from pool → fall open, never abort
+    return {}; // parent untracked / gone / pinned to the primary → fall open, never abort
   }
   // session-less aux (doc-agent / standalone critic): route to a pool account
   // EPHEMERALLY (no durable pin, no cursor persist); fall open if none eligible.
-  const result = assign(state, d.sessionId, pool, ready, strategy, resetOrder);
+  const result = assign(state, d.sessionId, pool, ready, strategy, resetOrder, primary);
   if (result.kind === "assigned") {
     const acct = pool.find((a) => a.number === result.accountNumber);
     const email = acct?.email ?? "";
     return { credentialDir: sessionProfileDir(backupRoot, result.accountNumber, email) };
   }
-  return {}; // warm / abort → never block an aux spawn
+  return {}; // passthrough (already the default login) / warm / abort → never block an aux spawn
 }
 
 /**
@@ -319,6 +322,20 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
     }
   };
 
+  /**
+   * The account reachable via PASS-THROUGH (the default `~/.claude` login) — i.e. cswap's active
+   * account — or null when routing to it would be unsafe.
+   *
+   * Null while a switch is in flight, and that gate is load-bearing rather than defensive: both
+   * `POST switch-primary` and the auto-heal dance make a DIFFERENT account primary while
+   * `refresh()` is suppressed by the same `switching` guard, so `activeAccountNumber` is stale for
+   * the duration. Pass-through during that window would land on whatever cswap made primary — for a
+   * heal, the very account cswap reports as unavailable. Fails closed: no fallback mid-switch,
+   * which is also what keeps the documented heal exposure window (README) accurate.
+   */
+  const passthroughPrimary = (): number | null =>
+    prewarmer.isSwitching ? null : (prewarmer.activeAccountNumber ?? null);
+
   // ── Boot: list the pool, then await boot-warm of ≥1 account (the spawn-acceptance gate).
   await prewarmer.refresh();
   history.recordQuota(prewarmer.pool);
@@ -337,6 +354,46 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
     void tick();
   }, cfg.refreshIntervalMs);
 
+  /**
+   * Commit a settled session assignment: persist pin + cursor durably BEFORE returning the patch
+   * (synchronous `ctx.state.set`), record it in `lastSpawn` / history, publish, and hand back the
+   * `SpawnPatch`.
+   *
+   * "assigned" injects the account's isolated profile dir. "passthrough" injects NOTHING: its
+   * account is the primary, whose credential store IS the default `~/.claude`, so an empty patch
+   * routes there correctly. That case records `credentialDir: null` rather than a path that does
+   * not exist, and logs — a pass-through means the rest of the pool is drained, which an operator
+   * should be able to see.
+   */
+  const commitSpawn = (
+    sessionId: string,
+    result: { kind: "assigned" | "passthrough"; accountNumber: number; nextState: SelectionState },
+  ): SpawnPatch => {
+    state.cursor = result.nextState.cursor;
+    state.assignments = result.nextState.assignments;
+    ctx.state.set("cursor", state.cursor);
+    ctx.state.set("assignments", state.assignments);
+
+    const acct = prewarmer.pool.find((a) => a.number === result.accountNumber);
+    // `assign` only returns "assigned"/"passthrough" for an account present in the pool.
+    const email = acct?.email ?? "";
+    const credentialDir =
+      result.kind === "assigned"
+        ? sessionProfileDir(backupRoot, result.accountNumber, email)
+        : null;
+    lastSpawn = { sessionId, accountNumber: result.accountNumber, credentialDir, at: now() };
+    history.recordSpawn({ sessionId, accountNumber: result.accountNumber, at: lastSpawn.at });
+    publish();
+
+    if (credentialDir === null) {
+      ctx.log.warn(
+        `spawn ${sessionId} routed to primary account ${result.accountNumber} via pass-through (default login; no isolated profile)`,
+      );
+      return {};
+    }
+    return { credentialDir };
+  };
+
   // ── Hot path: cheap in-memory selection + synchronous state persist. NO I/O.
   ctx.onSpawn((d): SpawnPatch | void => {
     // Aux spawns (review / plan-gate / doc / standalone critic — shepherd#1205) fire onSpawn so a
@@ -351,6 +408,7 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
     // `reset-soon` reads the clock once here (keeping `assign` Date-free) and uses the same
     // ranking for the main spawn and any session-less aux route below.
     const resetOrder = computeResetOrder(prewarmer.pool, Date.parse(now()), cfg.rateLimitPct);
+    const primary = passthroughPrimary();
 
     const kind = d.kind ?? "session";
     if (kind !== "session") {
@@ -363,6 +421,7 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
         backupRoot,
         cfg.strategy,
         resetOrder,
+        primary,
       );
     }
 
@@ -373,32 +432,11 @@ export async function register(ctx: PluginContext, deps?: PluginDeps): Promise<(
       prewarmer.ready,
       cfg.strategy,
       resetOrder,
+      primary,
     );
 
-    if (result.kind === "assigned") {
-      // Persist the pin + cursor durably BEFORE returning the patch (sync `state.set`).
-      state.cursor = result.nextState.cursor;
-      state.assignments = result.nextState.assignments;
-      ctx.state.set("cursor", state.cursor);
-      ctx.state.set("assignments", state.assignments);
-
-      const acct = prewarmer.pool.find((a) => a.number === result.accountNumber);
-      // `assign` only returns "assigned" for an account present in the pool.
-      const email = acct?.email ?? "";
-      const credentialDir = sessionProfileDir(backupRoot, result.accountNumber, email);
-      lastSpawn = {
-        sessionId: d.sessionId,
-        accountNumber: result.accountNumber,
-        credentialDir,
-        at: now(),
-      };
-      history.recordSpawn({
-        sessionId: d.sessionId,
-        accountNumber: result.accountNumber,
-        at: lastSpawn.at,
-      });
-      publish();
-      return { credentialDir };
+    if (result.kind === "assigned" || result.kind === "passthrough") {
+      return commitSpawn(d.sessionId, result);
     }
 
     if (result.kind === "warm") {

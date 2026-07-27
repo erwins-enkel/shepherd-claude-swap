@@ -698,6 +698,131 @@ describe("assign — two-tier selection", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Pass-through onto the primary — the last-resort tier.
+//
+// The primary can never be in `ready` (`cswap run <active>` creates no isolated session profile),
+// so without this tier a pool whose only healthy account is the primary halts every spawn.
+// ---------------------------------------------------------------------------
+
+describe("assign — pass-through onto the primary", () => {
+  it("new session, every non-primary rate-limited → passthrough onto the primary", () => {
+    const pool = [
+      makeAccount(1, { active: true }), // primary, healthy, never ready
+      makeAccount(2, { active: false, rateLimited: true }),
+    ];
+    const result = assign(emptyState, "s1", pool, new Set([2]), "round-robin", new Map(), 1);
+    expect(result.kind).toBe("passthrough");
+    if (result.kind !== "passthrough") throw new Error("unreachable");
+    expect(result.accountNumber).toBe(1);
+  });
+
+  it("passthrough pins the session and advances the cursor, exactly like assigned", () => {
+    const pool = [makeAccount(1, { active: true })];
+    const state: SelectionState = { cursor: 7, assignments: {} };
+    const result = assign(state, "s1", pool, new Set(), "round-robin", new Map(), 1);
+    expect(result.kind).toBe("passthrough");
+    expect(result.nextState.cursor).toBe(8);
+    expect(result.nextState.assignments["s1"]).toBe(1);
+    // input state untouched
+    expect(state.cursor).toBe(7);
+    expect(state.assignments["s1"]).toBeUndefined();
+  });
+
+  it("STRICTLY last resort: any ready account outranks the primary", () => {
+    const pool = [makeAccount(1, { active: true }), makeAccount(2, { active: false })];
+    const result = assign(emptyState, "s1", pool, new Set([2]), "round-robin", new Map(), 1);
+    expect(result.kind).toBe("assigned");
+    if (result.kind !== "assigned") throw new Error("unreachable");
+    expect(result.accountNumber).toBe(2);
+  });
+
+  it("outranked even by a ready quota-unknown account (the previous last tier)", () => {
+    const pool = [
+      makeAccount(1, { active: true }),
+      makeAccount(2, { active: false, usageUnavailable: true }),
+    ];
+    const result = assign(emptyState, "s1", pool, new Set([2]), "round-robin", new Map(), 1);
+    expect(result.kind).toBe("assigned");
+    if (result.kind !== "assigned") throw new Error("unreachable");
+    expect(result.accountNumber).toBe(2);
+  });
+
+  it("rate-limited primary → abort, not passthrough", () => {
+    const pool = [makeAccount(1, { active: true, rateLimited: true })];
+    const result = assign(emptyState, "s1", pool, new Set(), "round-robin", new Map(), 1);
+    expect(result.kind).toBe("abort");
+  });
+
+  it("unusable primary (out of rotation) → abort, not passthrough", () => {
+    const pool = [makeAccount(1, { active: true, usable: false, reason: "out-of-rotation" })];
+    const result = assign(emptyState, "s1", pool, new Set(), "round-robin", new Map(), 1);
+    expect(result.kind).toBe("abort");
+  });
+
+  it("primary null (caller mid-switch) → abort; the fallback is suppressed, not guessed", () => {
+    const pool = [makeAccount(1, { active: true })];
+    const result = assign(emptyState, "s1", pool, new Set(), "round-robin", new Map(), null);
+    expect(result.kind).toBe("abort");
+  });
+
+  it("primary absent from the pool → abort", () => {
+    const pool = [makeAccount(2, { active: false, rateLimited: true })];
+    const result = assign(emptyState, "s1", pool, new Set(), "round-robin", new Map(), 99);
+    expect(result.kind).toBe("abort");
+  });
+
+  it("omitted primary defaults to no fallback (fail closed)", () => {
+    const pool = [makeAccount(1, { active: true })];
+    const result = assign(emptyState, "s1", pool, new Set(), "round-robin", new Map());
+    expect(result.kind).toBe("abort");
+  });
+});
+
+describe("assign — resume of a session pinned to the primary", () => {
+  const pinned: SelectionState = { cursor: 4, assignments: { s1: 1 } };
+
+  it("pin became the primary → passthrough, NOT a forever-warm stall", () => {
+    const pool = [makeAccount(1, { active: true })];
+    const result = assign(pinned, "s1", pool, new Set(), "round-robin", new Map(), 1);
+    expect(result.kind).toBe("passthrough");
+    if (result.kind !== "passthrough") throw new Error("unreachable");
+    expect(result.accountNumber).toBe(1);
+    // Resume never mutates state — same object back.
+    expect(result.nextState).toBe(pinned);
+  });
+
+  it("without the primary hint the same resume still warms (pre-fix behavior preserved)", () => {
+    const pool = [makeAccount(1, { active: true })];
+    const result = assign(pinned, "s1", pool, new Set(), "round-robin", new Map(), null);
+    expect(result.kind).toBe("warm");
+  });
+
+  it("pinned primary that is rate-limited still aborts — passthrough never bypasses a gate", () => {
+    const pool = [makeAccount(1, { active: true, rateLimited: true })];
+    const result = assign(pinned, "s1", pool, new Set(), "round-robin", new Map(), 1);
+    expect(result.kind).toBe("abort");
+    expect(result.nextState).toBe(pinned);
+  });
+
+  it("pinned primary that is unusable still aborts", () => {
+    const pool = [makeAccount(1, { active: true, usable: false, reason: "cswap-disabled" })];
+    const result = assign(pinned, "s1", pool, new Set(), "round-robin", new Map(), 1);
+    expect(result.kind).toBe("abort");
+    if (result.kind !== "abort") throw new Error("unreachable");
+    expect(result.reason).toContain("cswap-disabled");
+  });
+
+  it("a non-primary pin is unaffected by the primary hint", () => {
+    const pool = [makeAccount(1, { active: true }), makeAccount(2, { active: false })];
+    const result = assign(pinned, "s1", pool, new Set([2]), "round-robin", new Map(), 2);
+    // pinned to 1, primary is 2 → normal warm path for 1, never reassigned to 2
+    expect(result.kind).toBe("warm");
+    if (result.kind !== "warm") throw new Error("unreachable");
+    expect(result.accountNumber).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Honoring `cswap disable` has a resume cost, and it must stay visible.
 //
 // A cswap-disabled row is `usable: false`, so assign()'s resume path aborts and

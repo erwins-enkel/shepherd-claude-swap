@@ -8,9 +8,12 @@ session lands on the same account it was created under. New sessions are distrib
 round-robin over usable, ready accounts by default, by most-remaining-quota when the
 `least-used` strategy is enabled, or — under `reset-soon` — onto an account whose 7-day window
 resets soonest (drain it before it refills), falling back to
-`least-used` when none qualify. When no account is usable the spawn is refused rather
-than silently falling back to the default login — Shepherd holds and retries a refused
-create until an account frees (no task loss), while a non-forced resume is hard-blocked.
+`least-used` when none qualify. When nothing is pre-warmed but cswap's own active account is
+still under its limits, spawns fall back onto it by pass-through (no `credentialDir`, so the
+default login serves) rather than halting — see [primary fallback](#primary-fallback). Only when
+_no_ account is usable at all is the spawn refused, rather than silently landing on whichever
+account happens to be the default login — Shepherd holds and retries a refused create until an
+account frees (no task loss), while a non-forced resume is hard-blocked.
 
 See [docs/PRD.md](docs/PRD.md) for full background and design rationale.
 
@@ -99,7 +102,7 @@ All fields are optional — the shipped `config.json` sets every default explici
 | `prewarmArgs`         | `string[]`                                      | `["--version"]` | Args passed after `cswap run <N> --` to bootstrap a session profile. `--version` exits instantly with no quota usage.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `refreshIntervalMs`   | `number`                                        | `60000`         | Background `cswap --list` refresh + stale-profile re-warm interval (ms).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `bootWarmTimeoutMs`   | `number`                                        | `30000`         | Max time (ms) the plugin waits for ≥1 account to become ready at boot before unblocking HTTP.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `abortOnEmpty`        | `boolean`                                       | `true`          | Refuse spawns (`ctx.abortSpawn`) when no usable account is available — Shepherd then holds and retries a refused create (no task loss) and hard-blocks a non-forced resume. Set `false` to fail-open (not recommended).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `abortOnEmpty`        | `boolean`                                       | `true`          | Refuse spawns (`ctx.abortSpawn`) when no usable account is available — Shepherd then holds and retries a refused create (no task loss) and hard-blocks a non-forced resume. Reached only after the [primary fallback](#primary-fallback) also declines, i.e. the active account is rate-limited or out too. Set `false` to fail-open (not recommended).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `makePrimaryButtons`  | `boolean`                                       | `true`          | Show a per-account **Make primary** `action-button` in the panel (see _Make primary picker_ below). Requires a host whose `publishUI` renderer includes `action-button` (shepherd#1209/#1210). Set `false` on an older host to fall back to badge-only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `rotationButtons`     | `boolean`                                       | `true`          | Show per-account **Take out of rotation** / **Return to rotation** `action-button`s in the panel (see _Out-of-rotation toggle_ below). Same host requirement as `makePrimaryButtons` (`action-button` renderer, shepherd#1209/#1210); a separate flag so the two toggle independently. Set `false` on an older host to fall back to badge-only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `routeAuxQuota`       | `boolean`                                       | `true`          | Route aux spawns (review / plan-gate / doc) onto a pool account (see _Aux spawns_ below). **Requires a Shepherd release containing shepherd#1217**, which binds the routed `credentialDir` into the reviewer sandbox. ⚠️ #1217 is **not yet in a shipped release** (latest v1.38.0 predates it), so on any host without it you **must** set `false` or routed reviewers run **unauthenticated** (re-login + theme prompt). Default `true` is a deliberate choice; the opt-out is annotated in `config.json`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
@@ -198,8 +201,10 @@ stuck accounts heal one per subsequent cycle (~10 min apart). Lower `refreshInte
 
 **Exposure / lock window:** for up to `healLaunchTimeoutMs` (default 60 s) the stuck account
 is the active primary. Pass-through spawns can land on it only if `abortOnEmpty: false` or
-`routeAuxQuota: false` (the defaults keep spawns off it). `POST switch-primary` returns 409
-during that window.
+`routeAuxQuota: false` (the defaults keep spawns off it). The
+[primary fallback](#primary-fallback) does **not** widen this: it is suppressed for the whole
+dance, precisely because the pool snapshot is stale then and it would otherwise route onto the
+account cswap is reporting as unavailable. `POST switch-primary` returns 409 during that window.
 
 **Outcome lag:** the "Last heal" status in `GET stats` and the Settings panel may briefly show
 `failed` for a genuine heal, converging within one `refreshIntervalMs` (≈60 s at the code
@@ -534,15 +539,27 @@ diff /tmp/before.json /tmp/after.json
   `cswap`'s documented scheme (`sessions/<N>-<emailSlug>/`). If `cswap` changes its layout
   the plugin breaks. See [docs/PRD.md §9](docs/PRD.md) for the mitigation strategy.
 
-- **The currently-active `cswap` account is excluded from the rotation pool.** `cswap run
-<active>` takes a same-account fast path that launches `claude` under the default
-  `~/.claude` **without** creating an isolated session profile. With no
-  `sessions/<N>-<slug>/` dir to point at, the warm-time existence guard never marks that
-  account ready, so it is never assigned (the plugin won't inject a non-existent
-  `credentialDir`). Consequence: rotation spans your **non-active** accounts. To rotate
-  across N accounts, make sure the one `cswap` currently has active is not the only spare —
-  or use `POST switch-primary` (modes `specific`/`next`/`best`) to change the active account
-  from the plugin without reaching for `cswap --switch-to` directly. After a switch the
+- <a id="primary-fallback"></a>**The currently-active `cswap` account is excluded from normal
+  rotation, and serves as the last-resort fallback.** `cswap run <active>` takes a same-account
+  fast path that launches `claude` under the default `~/.claude` **without** creating an isolated
+  session profile. With no `sessions/<N>-<slug>/` dir to point at, the warm-time existence guard
+  never marks that account ready, so it is never assigned by the normal path (the plugin won't
+  inject a non-existent `credentialDir`). Consequence: routine rotation spans your **non-active**
+  accounts.
+
+  When **no** pre-warmed account is eligible, however, the plugin falls back onto the active
+  account by **pass-through** — emitting no `credentialDir` at all, so the spawn runs on the
+  default `~/.claude` login, which _is_ that account. This is strictly last resort: any ready
+  account, including a quota-unknown one, outranks it. It applies only while the active account is
+  itself `usable` and under `rateLimitPct` — the fallback is not a bypass, and a rate-limited or
+  out-of-rotation primary still aborts. It is also suppressed while a `POST switch-primary` or an
+  auto-heal dance is in flight, because the pool snapshot (and therefore the plugin's idea of which
+  account is active) is stale for that window. `GET stats` reports such a spawn with
+  `lastSpawn.credentialDir: null`, and each one is logged.
+
+  To rotate across N accounts normally, make sure the one `cswap` currently has active is not the
+  only spare — or use `POST switch-primary` (modes `specific`/`next`/`best`) to change the active
+  account from the plugin without reaching for `cswap --switch-to` directly. After a switch the
   newly-active account leaves the rotation and the previously-active account rejoins it
   (re-warmed in the background). Verified end-to-end against live `cswap`; see
   [docs/contracts/smoke-test-results.md](docs/contracts/smoke-test-results.md).
@@ -554,17 +571,20 @@ diff /tmp/before.json /tmp/after.json
   `CLAUDE_CONFIG_DIR`; only the active account uses `~/.claude` as its credential store, and
   it is excluded from rotation).
 
-- **Operator recovery: pinned session blocked after a switch.** If you switch the primary
-  **to** an account that currently has a live Shepherd session pinned to it, that account's
-  isolated session profile moves into `~/.claude`, so the pinned session can no longer be
-  warmed and its resume aborts ("warming; retry resume"). **Recovery:** switch the primary
-  **away** from that account (to any other account, or `next`/`best`) — this restores its
-  isolated session profile and the pinned session can resume.
+- **Switching the primary onto a pinned account no longer blocks its resume.** If you switch the
+  primary **to** an account that currently has a live Shepherd session pinned to it, that account's
+  isolated session profile moves into `~/.claude`. The resume is served by
+  [pass-through](#primary-fallback) instead — no `credentialDir`, same account, same identity — so
+  no operator recovery step is needed. (Before the pass-through fallback this aborted with
+  "warming; retry resume" until you switched the primary away again.) A pinned account that is
+  rate-limited or out of rotation still aborts, primary or not.
 
 - **Rate-limited accounts are skipped** for new assignments (5h or 7d `pct ≥ rateLimitPct`),
-  as reported by `cswap --list --json`. If every non-active account is rate-limited, new
-  creates are refused and held in Shepherd's hold queue, retried until one frees up (no task
-  loss); a non-forced resume is hard-blocked.
+  as reported by `cswap --list --json`. If every non-active account is rate-limited, new spawns
+  fall back onto the active account by [pass-through](#primary-fallback) while the others recover.
+  Only if the active account is **also** rate-limited (or otherwise unusable) are creates refused
+  and held in Shepherd's hold queue, retried until one frees up (no task loss); a non-forced resume
+  is then hard-blocked.
 
 - **Accounts with unknown quota are deprioritized.** When `cswap --list --json` reports an account with `usageStatus: "ok"` but no usage figures (both 5h and 7d `pct` absent), its quota is unknown for that refresh. The panel shows a **quota unknown** badge instead of a misleading `0%` meter, and selection uses such an account only as a last resort — a new session is assigned a quota-unknown account only when no fully-known ready account exists. A resume stays pinned to its account regardless. The state clears automatically on the next refresh that reports usage. (Addresses [claude-swap#62](https://github.com/realiti4/claude-swap/issues/62).)
 
