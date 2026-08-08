@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.5.0](https://github.com/erwins-enkel/shepherd-claude-swap/compare/shepherd-claude-swap-v0.4.0...shepherd-claude-swap-v0.5.0) (2026-07-28)
+
+
+### Features
+
+* show per-model (Fable) weekly limits on the usage page ([#38](https://github.com/erwins-enkel/shepherd-claude-swap/issues/38)) ([52745cd](https://github.com/erwins-enkel/shepherd-claude-swap/commit/52745cdf8907cad1a46c45af5d666957bef13a48))
+* take an account out of rotation from the settings pane ([#40](https://github.com/erwins-enkel/shepherd-claude-swap/issues/40)) ([fdb2ce8](https://github.com/erwins-enkel/shepherd-claude-swap/commit/fdb2ce80dc1164b9902cc6900146d01d8c839290))
+
+
+### Bug Fixes
+
+* **selection:** fall back to primary when no account is pre-warmed ([#64](https://github.com/erwins-enkel/shepherd-claude-swap/issues/64)) ([68c74ba](https://github.com/erwins-enkel/shepherd-claude-swap/commit/68c74ba6fd66e467a116f2937b178a0287da6bfb))
+* **ui-view:** fold per-model weekly windows into one table + gauge ([#58](https://github.com/erwins-enkel/shepherd-claude-swap/issues/58)) ([9a0f1eb](https://github.com/erwins-enkel/shepherd-claude-swap/commit/9a0f1ebd417ddbb63a590d87c5b70d48aa8fcd4f))
+
 ## [0.4.0](https://github.com/erwins-enkel/shepherd-claude-swap/compare/shepherd-claude-swap-v0.3.0...shepherd-claude-swap-v0.4.0) (2026-06-30)
 
 
