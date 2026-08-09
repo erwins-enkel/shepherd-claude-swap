@@ -17,7 +17,7 @@
     "@commitlint/config-conventional": "^21.2.0",
     "@types/bun": "latest",
     "eslint": "^10.8.0",
-    "fallow": "^3.10.0",
+    "fallow": "^3.14.0",
     "husky": "^9.0.0",
     "lint-staged": "^17.2.0",
     "prettier": "^3.9.6",
